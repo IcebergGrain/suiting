@@ -1,0 +1,27 @@
+随听安卓测试版第三方说明
+
+NetEase request field mappings and protocol interoperability are based on
+NeteaseCloudMusicApiEnhanced/api-enhanced, pinned reference version 4.41.1.
+https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced
+The original MIT license is reproduced in NETEASE-LICENSE.txt.
+The Android transport is a separate Java implementation; the Node service
+and its dependencies are not embedded or run inside the APK.
+
+AndroidX WebKit 1.12.1 and its AndroidX runtime dependencies:
+https://developer.android.com/jetpack/androidx/releases/webkit
+Licensed under Apache License 2.0, reproduced in APACHE-LICENSE.txt.
+
+ZXing Core 3.5.3:
+https://github.com/zxing/zxing
+Licensed under Apache License 2.0, reproduced in APACHE-LICENSE.txt.
+
+AndroidX Media3 ExoPlayer and Session 1.5.1, and their runtime dependencies:
+https://github.com/androidx/media/tree/1.5.1
+Licensed under Apache License 2.0, reproduced in APACHE-LICENSE.txt.
+Background playback architecture references the official session demo and
+Android Developers MediaSessionService documentation. No third-party music
+application source has been copied into this project.
+
+This application is an independent personal playlist assistant.
+It is not affiliated with NetEase or an official NetEase product.
+NetEase retains control of login permissions, catalog access and playback rights.

@@ -1,0 +1,169 @@
+/* 0.7.1 主题：亮/暗两套变量，全部组件走变量，避免深色模式下出现白块。 */
+
+:root {
+  color-scheme: light dark;
+  --paper: #fbfbf8;
+  --paper-2: #f5f5f0;
+  --surface: #ffffff;
+  --surface-2: #f7f7f2;
+  --ink: #1d2f28;
+  --muted: #6c7a70;
+  --line: #e7e5de;
+  --accent: #1f4a3c;
+  --accent-ink: #ffffff;
+  --soft: #e6eee7;
+  --soft-strong: #d7e6da;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #131a16;
+    --paper-2: #18211c;
+    --surface: #1c2620;
+    --surface-2: #223028;
+    --ink: #e8efe9;
+    --muted: #9cb0a3;
+    --line: #2c3b31;
+    --accent: #a8d5b5;
+    --accent-ink: #0f2418;
+    --soft: #26372b;
+    --soft-strong: #31463a;
+  }
+}
+
+body, .shell { background: var(--paper); color: var(--ink); }
+.main { max-width: 1240px; }
+.rail { background: var(--paper-2); border-right-color: var(--line); }
+.mobile-nav { background: var(--surface); border-top-color: var(--line); }
+.mobile-nav .nav-button { color: var(--muted); }
+.mobile-nav .nav-button.active { background: var(--soft); color: var(--accent); }
+
+/* 说明文字默认收起，展开折叠才出现 */
+.tiny-note { display: none; }
+details[open] .tiny-note { display: block; }
+.quiet-copy, .disclosure, .banner-note { display: none; }
+
+/* 顶部 */
+.topbar { margin-bottom: 24px; }
+.topbar p { font-size: 13px; margin-top: 6px; color: var(--muted); }
+h1 { font-size: 25px; letter-spacing: -0.02em; color: var(--ink); }
+
+/* 卡片与分组 */
+.tuning, .panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: none;
+}
+.tuning-head { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+.tuning-head h2 { font-size: 15px; color: var(--ink); }
+.tuning-head span { color: var(--muted); }
+
+.control-group { padding: 16px 20px 0; }
+.control-group + .control-group { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.control-group:last-child { padding-bottom: 18px; }
+.control-title { margin-bottom: 10px; }
+.control-title strong, .control-title label { font-size: 12.5px; font-weight: 600; color: var(--muted); letter-spacing: 0.02em; }
+.control-title span { font-size: 11px; color: var(--muted); }
+
+/* 氛围：三列大格，选中用浅底 + 实心点 */
+.moods { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.mood {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 11px 6px;
+  font-size: 12px;
+  color: var(--ink);
+  flex-direction: row;
+  justify-content: center;
+  gap: 6px;
+}
+.mood.selected { background: var(--soft); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.mood.all { grid-column: 1 / -1; background: var(--surface-2); border-style: dashed; color: var(--muted); }
+.mood.all.selected { border-style: solid; background: var(--soft); color: var(--ink); }
+.mood-dot { box-shadow: 0 0 0 1px #00000010 inset; }
+
+.chip { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); border-radius: 9px; padding: 7px 11px; }
+.chip.selected { background: var(--soft); border-color: var(--accent); color: var(--ink); }
+.genre-chips, .tag-catalog { gap: 6px; }
+
+select, .text-input { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; }
+.button { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 9px; }
+.button:hover { background: var(--soft); }
+.button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.button.primary:hover { filter: brightness(0.94); }
+.button.quiet { background: transparent; border-color: transparent; }
+.button.quiet:hover { background: var(--soft); }
+.text-button { color: var(--accent); }
+.generate { min-height: 48px; font-size: 14px; }
+
+/* 折叠项：统一一行摘要 */
+details.more-block, details.advanced-control { border-top: 1px solid var(--line); padding: 12px 0 0; margin-top: 14px; }
+details.advanced-control { border-top: 0; padding-top: 8px; margin-top: 8px; }
+details.more-block > summary, details.advanced-control > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  font-size: 12.5px; font-weight: 550; color: var(--ink); padding: 4px 0;
+}
+details.more-block > summary::-webkit-details-marker, details.advanced-control > summary::-webkit-details-marker { display: none; }
+details.more-block > summary::after, details.advanced-control > summary::after { content: "＋"; color: var(--muted); font-weight: 400; }
+details.more-block[open] > summary::after, details.advanced-control[open] > summary::after { content: "－"; }
+details.more-block > summary span, details.advanced-control > summary span { color: var(--muted); font-weight: 400; font-size: 11px; }
+details.more-block > .more-body, details.advanced-control > .advanced-body { padding-top: 10px; }
+
+/* 队列 */
+.record-banner { background: var(--soft); border-radius: 16px; padding: 20px 22px; min-height: 116px; }
+.record-copy h2 { font-size: 19px; margin-bottom: 4px; color: var(--ink); }
+.record-copy p { font-size: 12px; color: var(--muted); }
+.record { width: 86px; height: 86px; border-width: 8px; }
+.record-label { width: 34px; height: 34px; }
+.track { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.song-title strong { color: var(--ink); }
+.song-meta, .track-reason { color: var(--muted); }
+
+.tag { background: var(--soft); color: var(--ink); }
+.tag.unknown { background: var(--surface-2); color: var(--muted); }
+.tag.auto { background: var(--soft); color: var(--ink); border: 1px solid var(--line); }
+
+.notice { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; }
+.toast { background: var(--ink); color: var(--paper); }
+
+/* 歌单分组卡片 */
+.playlist-group {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 4px 14px;
+  margin-top: 12px;
+  background: var(--surface-2);
+}
+.playlist-group h4 {
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--muted); margin: 10px 0 4px; display: flex; justify-content: space-between;
+}
+.playlist-group h4 span { font-weight: 400; }
+.playlist-group .remote-playlist { border-bottom: 1px solid var(--line); padding: 11px 0; }
+.playlist-group .remote-playlist:last-child { border-bottom: 0; }
+.playlist-group .remote-playlist h3 { font-size: 13px; color: var(--ink); }
+.playlist-group .remote-playlist p { font-size: 11px; color: var(--muted); }
+
+.classify-progress progress { height: 6px; border-radius: 99px; }
+.classify-stats { color: var(--muted); }
+.login-placeholder { background: var(--surface-2); }
+.qr-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+@media (max-width: 700px) {
+  .main { padding-left: 16px; padding-right: 16px; }
+  .moods { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .mood { flex-direction: column; gap: 5px; padding: 10px 2px; font-size: 11.5px; }
+  .tuning-head { padding: 15px 16px; }
+  .control-group { padding: 14px 16px 0; }
+  .control-group + .control-group { margin-top: 14px; padding-top: 14px; }
+  .record-banner { padding: 16px; min-height: 100px; }
+  .record { width: 66px; height: 66px; border-width: 6px; }
+  .chip { font-size: 11.5px; padding: 6px 10px; }
+  .player-heading { flex-wrap: wrap; }
+  .player-heading .button { flex-shrink: 0; max-width: 100%; }
+  .player-track { flex: 1 1 100%; min-width: 0; }
+  .player-art { width: 44px; height: 44px; }
+  .playlist-group { padding: 2px 12px; }
+}

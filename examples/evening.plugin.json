@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "id": "community.evening",
+  "name": "夜里慢慢听",
+  "version": "1.0.0",
+  "description": "明确点击应用后，填入温柔／安静、20首等参数；不会自动生成或修改网易云。",
+  "kind": "preset",
+  "preset": { "moods": ["gentle", "calm"], "countMode": "preset", "count": 20, "variation": 25 }
+}

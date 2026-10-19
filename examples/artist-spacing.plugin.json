@@ -1,0 +1,9 @@
+{
+  "apiVersion": 1,
+  "id": "community.artist-spacing",
+  "name": "DIY 歌手错开",
+  "version": "1.0.0",
+  "description": "只重排本次已经选中的歌，尽量避免连续同歌手，不增加任何外部歌曲。",
+  "kind": "queue-order",
+  "rule": "artist-spacing"
+}

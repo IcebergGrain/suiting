@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#234d3c">
+  <meta name="description" content="本地音乐优先，在自己的曲库中可控随机，可选连接网易云。">
+  <title>随听 0.1.1 · 你的随机，由你调频</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/controls.css">
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/experience.css">
+  <link rel="stylesheet" href="/gpt-edition.css">
+  <link rel="stylesheet" href="/appearance.css">
+  <link rel="stylesheet" href="/public-edition.css">
+  <script src="/boot.js" defer></script>
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <div id="app"><main class="boot"><p>随听</p><span>正在打开你的听歌工作台…</span></main></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <audio id="audio" preload="none"></audio>
+</body>
+</html>

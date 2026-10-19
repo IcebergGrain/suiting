@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">随听</string>
+    <string name="webview_update_required">请先更新 Android System WebView 或系统浏览器组件，再重新打开随听。当前组件不支持安全的本地接口。</string>
+</resources>

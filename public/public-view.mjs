@@ -1,0 +1,8 @@
+import { featureCatalog } from '../src/features.mjs';
+
+export function renderLocalImport({busy,native,escape}) {
+  return '<section class="local-import" aria-label="本地音乐导入"><div><h2>把你的音乐带进来</h2><p>'+(native?'选择本地音频，授权保存在本机。重启后可继续使用；文件移动或撤权时需要重新选择。':'音频保存在当前浏览器的本地存储，不上传。存储不足时会明确提示；JSON 备份不包含音频。')+'</p></div><div class="actions"><button class="button primary" data-action="local-import" '+(busy?'disabled':'')+'>导入本地音乐</button><button class="button" data-action="local-refresh" '+(busy?'disabled':'')+'>检查本地曲库</button></div><p class="public-note">本地文件不转码、不上传、不修改原文件。仅支持普通音频文件，NCM／QMC 等加密文件不能直接播放。浏览器版每首上限512 MB、每次最多1000首；Android不复制音频。</p></section>';
+}
+export function renderFeatureSettings({state,escape}) {
+  return '<section class="feature-settings" aria-label="功能插件"><button class="button quiet" data-action="profile-home">返回个人主页</button><h2>功能由你决定</h2><p class="public-note">本地曲库与可控随机是核心，始终可用。其余能力按插件独立开启；关闭不删歌单、分类或听过记录。</p>'+featureCatalog.map(feature=>'<article class="feature-row"><div><h3>'+escape(feature.name)+'</h3><p>'+escape(feature.description)+'</p><small>'+escape(feature.kind)+(feature.network?' · 联网／需本人授权':' · 本机能力')+'</small></div><button class="button '+(state.features[feature.id]?'primary':'')+'" data-action="toggle-feature" data-feature="'+feature.id+'" role="switch" aria-checked="'+state.features[feature.id]+'" aria-label="'+escape(feature.name)+'" '+(state.busy || feature.id==='desktopLyrics' && !state.nativeDevice ? 'disabled':'')+'>'+ (state.features[feature.id]?'已开启 · 关闭':'已关闭 · 开启')+'</button></article>').join('')+'<p class="public-note">JSON 预设与重排扩展默认关闭。开发者可扩展数据源、元数据、歌词或队列重排；源码插件是可信代码，不是任意 JS 沙箱。平台连接关闭时，核心不会向平台发起新请求；已发出的请求无法撤回。</p></section>';
+}
