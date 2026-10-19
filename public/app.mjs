@@ -5,6 +5,8 @@ import { mergeLocalLibrary, parseLocalLyrics } from '/src/local-library.mjs';
 import { normalizeLyrics } from '/src/lyrics.mjs';
 import { createLocalFiles } from './local-files.mjs';
 import { renderLocalImport, renderFeatureSettings } from './public-view.mjs';
+import { easterSearchTrigger } from '/src/easter.mjs';
+import { createEasterEggs } from './easter-eggs.mjs';
 import { generateQueue, mergePlaylistSnapshot, getRecentSongs, getClassificationCoverage, getTagCatalog, parseTags, normalizeQueueOptions, moodDefinitions, genreDefinitions, songMoods, songGenres } from '/src/shuffle.mjs';
 import { songLanguages, languageDefinitions, languageFilterDefinitions, languageMatches, normalizeLanguages, needsLanguageLookup } from '/src/languages.mjs';
 import { renderLanguageControls, renderLanguageEditor } from './language-view.mjs';
@@ -105,6 +107,14 @@ const player = (mobileRuntime ? createNativeQueuePlayer : createQueuePlayer)({
   },
 });
 
+
+const easterEggs = createEasterEggs({
+  player, songs: allSongs, escape,
+  stream: id => api('/api/preview', { method: 'POST', body: JSON.stringify({ id, quality: state.playback.quality }) }),
+  search: keywords => api('/api/search', { method: 'POST', body: JSON.stringify({ keywords }) }),
+  blocked: id => Boolean(state.blacklist[id]), canPlay: song => !song.demo && canUseSong(song, state.features),
+  onBlacklist: song => setSongBlocked(song.id, true, song),
+});
 
 function updatePlaybackPreferences(view) {
   const preferences = normalizePlaybackPreferences(view);
@@ -724,7 +734,7 @@ function render() {
   draggingProgress = false;
   const headings = { workspace: ['今天想怎么听？', '选范围，挑氛围，生成下一批。'], library: ['我的音乐', '收藏的歌单，熟悉的打开方式。'], sync: ['音乐来源', '本地优先，需要时再开启网易云连接。'], daily: ['日推', '网易云推荐，喜欢就留下。'], profile: ['个人主页', '收藏、黑名单与桌面歌词。'] };
   const [title, subtitle] = headings[state.tab];
-  root.innerHTML = `<div class="shell"><aside class="rail"><a href="#" class="brand" data-tab="workspace"><img src="/icon.svg" alt=""><span>随听 <span class="gpt-label">本地优先</span><small>SUI TING</small></span></a>${nav()}<div class="rail-foot">${icon('shield')}<p>随听 · 0.1.1<br>本地音乐 · 自由调频</p></div></aside><main class="main surface-${state.tab}" aria-busy="${state.busy}"><header class="topbar"><div class="top-title"><h1>${title}</h1><p>${subtitle}</p></div><div class="topbar-actions"><button class="button sync-button" ${!state.features.netease ? 'hidden' : ''} data-action="sync-all" ${state.busy || !state.sources.some(isRemoteSource) ? 'disabled' : ''}>${icon('sync')}同步</button><button class="button account-button" data-tab="profile" aria-label="个人主页"><span class="my-avatar">${state.localAvatar ? `<img src="${escape(state.localAvatar)}" alt="">` : icon('user')}</span><span class="my-label">我的</span></button></div></header>
+  root.innerHTML = `<div class="shell"><aside class="rail"><a href="#" class="brand" data-tab="workspace"><img src="/icon.svg" alt=""><span>随听 <span class="gpt-label">本地优先</span><small>SUI TING</small></span></a>${nav()}<div class="rail-foot">${icon('shield')}<p>随听 · 0.1.2<br>本地音乐 · 自由调频</p></div></aside><main class="main surface-${state.tab}" aria-busy="${state.busy}"><header class="topbar"><div class="top-title"><h1>${title}</h1><p>${subtitle}</p></div><div class="topbar-actions"><button class="button sync-button" ${!state.features.netease ? 'hidden' : ''} data-action="sync-all" ${state.busy || !state.sources.some(isRemoteSource) ? 'disabled' : ''}>${icon('sync')}同步</button><button class="button account-button" data-tab="profile" aria-label="个人主页"><span class="my-avatar">${state.localAvatar ? `<img src="${escape(state.localAvatar)}" alt="">` : icon('user')}</span><span class="my-label">我的</span></button></div></header>
   ${state.unsaved ? '<div class="notice error" role="alert">本次更改尚未保存，请先导出备份。<button class="text-button" data-action="export-backup">立即导出</button></div>' : ''}
   ${state.error ? `<div class="notice error" role="alert">${escape(state.error)} <button class="text-button" data-action="dismiss-error">收起</button></div>` : ''}
   ${state.busy ? `<div class="notice" role="status">${escape(state.busyText)}</div>` : ''}
@@ -876,6 +886,7 @@ async function toggleFeature(id) {
   if(id==='desktopLyrics' && enabled && !state.features.lyrics) {toast('请先开启「歌词与翻译」插件。');return;}
   await perform('正在保存功能开关…',async()=>{
     state.features=normalizeFeatures(await api('/api/features',{method:'POST',body:JSON.stringify({id,enabled})}));
+    if (id === 'easterEggs' && !enabled || id === 'netease' && !enabled) easterEggs.close();
     if(id==='netease' && !enabled) {
       ++accountEpoch;clearTimeout(qrTimer);++classifyEpoch;classificationQueue.clear();state.classifyProgress=null;++languageEpoch;state.languageProgress=null;
       await player.stop();state.queue=state.queue.filter(song=>canUseSong(song,state.features));
@@ -1328,6 +1339,8 @@ root.addEventListener('keydown', event => {
   if (event.target.closest('.lyrics-lines') && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) setLyricFollow(false);
   if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || !searchInputs[event.target.id]) return;
   event.preventDefault(); searchInputs[event.target.id].flush();
+  const egg = easterSearchTrigger({ id: event.target.id, value: event.target.value, composing: searchInputs[event.target.id].composing, enabled: state.features.easterEggs });
+  if (egg) void easterEggs.open(egg);
 });
 root.addEventListener('focusout', event => {
   if (!searchInputs[event.target.id]) return;
@@ -1453,6 +1466,7 @@ if (mobileRuntime) {
     receiveShare,
     onNativeState: theme => { if (theme === 'dark' || theme === 'light') systemTheme = theme; applyAppearance(false); player.refresh?.(); if (state.overlayOpen) refreshOverlay(); },
     handleBack: () => {
+      if (easterEggs.isOpen()) { easterEggs.close(); return true; }
       if (state.editingId) state.editingId = null;
       else if (state.libraryPlaylist && state.tab === 'library') state.libraryPlaylist = null;
       else if (state.tab === 'profile' && (state.profileSection !== 'home' || state.overlayOpen)) { state.profileSection = 'home'; state.overlayOpen = false; }

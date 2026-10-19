@@ -19,6 +19,7 @@ public class PublicEditionTest {
     @Test public void platformNetworkIsOffByDefaultAndClientGatePrecedesTransport() throws Exception {
         assertFalse(PublicFeatures.defaultValue("netease"));assertFalse(PublicFeatures.defaultValue("desktopLyrics"));
         assertTrue(PublicFeatures.defaultValue("metadata"));assertFalse(PublicFeatures.valid("arbitrary-network"));
+        assertTrue(PublicFeatures.valid("easterEggs"));assertFalse(PublicFeatures.defaultValue("easterEggs"));
         NetEaseClient client=new NetEaseClient();client.setNetworkPermission(()->false);
         try {client.call("login_status",new JSONObject());fail();} catch(IllegalStateException expected) {assertTrue(expected.getMessage().contains("关闭"));}
     }

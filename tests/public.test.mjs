@@ -15,7 +15,7 @@ import { renderFeatureSettings } from '../public/public-view.mjs';
 
 const id='local-'+ 'a'.repeat(64), other='local-'+'b'.repeat(64);
 test('public defaults are offline and feature import never grants unknown or truthy permissions',()=>{
-  assert.deepEqual(normalizeFeatures(),{netease:false,metadata:true,lyrics:true,desktopLyrics:false});
+  assert.deepEqual(normalizeFeatures(),{netease:false,metadata:true,lyrics:true,desktopLyrics:false,easterEggs:false});
   assert.equal(normalizeFeatures({netease:'true',custom:true}).netease,false);
   assert.throws(()=>updateFeature({},'unknown',true));
   assert.throws(()=>updateFeature({},'netease','true'));
@@ -81,6 +81,9 @@ test('server blocks all platform work by default and disabling one session inval
   const server=createApp({service});server.listen(0,'127.0.0.1');await once(server,'listening');
   t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
   const base='http://127.0.0.1:'+server.address().port;
+  const easterModule=await fetch(base+'/src/easter.mjs');
+  assert.equal(easterModule.status,200);
+  assert.match(await easterModule.text(),/resolveEasterEgg/u);
   const first=await fetch(base+'/api/features'),cookie=first.headers.get('set-cookie').split(';')[0];
   assert.equal((await first.json()).netease,false);
   assert.equal((await fetch(base+'/api/login/qr',{method:'POST',headers:{Cookie:cookie,'Content-Type':'application/json'},body:'{}'})).status,403);
@@ -95,7 +98,8 @@ test('public UI exposes switch states and ships no unverified GIF or hidden netw
   assert.match(html,/role="switch" aria-checked="false"/u);
   assert.match(html,/网易云连接/u);
   const app=await readFile(new URL('../public/app.mjs',import.meta.url),'utf8');
-  assert.doesNotMatch(app,/createEasterEggs|resolveEasterEgg/u);
+  assert.match(app,/createEasterEggs/u);
+  assert.equal(normalizeFeatures().easterEggs,false);
   assert.match(app,/suiting\.public\.library\.v1/u);
   assert.match(app,/initializePublic\(\)/u);
 });

@@ -7,12 +7,12 @@ import org.json.JSONObject;
 public final class PublicFeatures {
     private final SharedPreferences preferences;
     public PublicFeatures(Context context) { preferences=context.getSharedPreferences("public-features",Context.MODE_PRIVATE); }
-    public static boolean valid(String id) { return java.util.Arrays.asList("netease","metadata","lyrics","desktopLyrics").contains(id); }
+    public static boolean valid(String id) { return java.util.Arrays.asList("netease","metadata","lyrics","desktopLyrics","easterEggs").contains(id); }
     public static boolean defaultValue(String id) { return id.equals("metadata") || id.equals("lyrics"); }
     public boolean enabled(String id) { if(!valid(id)) throw new IllegalArgumentException("Invalid feature"); return preferences.getBoolean(id,defaultValue(id)); }
     public JSONObject snapshot() throws Exception {
         JSONObject result=new JSONObject();
-        for(String id:java.util.Arrays.asList("netease","metadata","lyrics","desktopLyrics")) result.put(id,enabled(id));
+        for(String id:java.util.Arrays.asList("netease","metadata","lyrics","desktopLyrics","easterEggs")) result.put(id,enabled(id));
         return result;
     }
     public JSONObject set(String id,Object enabled) throws Exception {

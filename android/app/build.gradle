@@ -10,8 +10,8 @@ android {
         applicationId 'io.suiting.music.publicapp'
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName '0.1.1-public'
+        versionCode 3
+        versionName '0.1.2-public'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
