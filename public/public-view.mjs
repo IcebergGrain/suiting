@@ -1,5 +1,21 @@
 import { featureCatalog } from '../src/features.mjs';
 
+export function renderListeningWelcome({ state, songCount, escape }) {
+  const connected = state.features.netease && state.status.loggedIn;
+  const ready = songCount > 0;
+  const title = ready ? '让熟悉的歌，重新心动。' : '你的音乐，从这里开始。';
+  const description = connected
+    ? ready ? '曲库已就位。选一种心情，把下一首交给随听。' : '账号已连接。下一步，选一个歌单同步到曲库。'
+    : ready ? '曲库已就位，选好心情就能生成。也可以连接网易云，带来更多喜欢的歌。' : '连接网易云，把喜欢的歌带过来。挑选心情，生成属于此刻的播放列表。';
+  return `<section class="listening-welcome ${ready ? 'has-library' : ''}" aria-label="开始听歌">
+    <div class="welcome-copy"><span class="welcome-eyebrow">SUI TING / YOUR DAILY MIX</span><h2>${title}</h2><p>${description}</p>
+    <div class="welcome-actions"><button class="button primary welcome-connect" data-action="connect-netease" ${state.busy ? 'disabled' : ''}>${connected ? '管理网易云歌单' : '连接网易云音乐'} <span aria-hidden="true">↗</span></button><button class="button welcome-local" data-action="local-import" ${state.busy ? 'disabled' : ''}>导入本地音乐</button></div>
+    <span class="welcome-note">${connected ? `已连接 · ${escape(state.status.profile?.nickname || '网易云账号')}` : '扫码登录 · 连接后选择歌单 · 也可以只听本地音乐'}</span></div>
+    <div class="welcome-art" aria-hidden="true"><div class="welcome-sleeve"><span>随 听</span><small>SIDE A · PLAY YOUR MOOD</small></div><div class="welcome-vinyl"><span>随听<br>33⅓ RPM</span></div></div>
+    <ol class="listening-steps" aria-label="听歌步骤"><li class="${!ready ? 'current' : 'complete'}" ${!ready ? 'aria-current="step"' : ''}><span>01</span><div><strong>带上你的歌</strong><small>${ready ? `曲库已有 ${songCount} 首` : connected ? '选择歌单并同步' : '连接网易云或导入本地'}</small></div></li><li class="${ready ? state.queue.length ? 'complete' : 'current' : ''}" ${ready && !state.queue.length ? 'aria-current="step"' : ''}><span>02</span><div><strong>选一种听法</strong><small>范围、心情与歌曲数量</small></div></li><li class="${ready && state.queue.length ? 'current' : ''}" ${ready && state.queue.length ? 'aria-current="step"' : ''}><span>03</span><div><strong>开始听，发现惊喜</strong><small>播放这一批，或存回网易云</small></div></li></ol>
+  </section>`;
+}
+
 export function renderLocalImport({busy,native,escape}) {
   return '<section class="local-import" aria-label="本地音乐导入"><div><h2>把你的音乐带进来</h2><p>'+(native?'选择本地音频，授权保存在本机。重启后可继续使用；文件移动或撤权时需要重新选择。':'音频保存在当前浏览器的本地存储，不上传。存储不足时会明确提示；JSON 备份不包含音频。')+'</p></div><div class="actions"><button class="button primary" data-action="local-import" '+(busy?'disabled':'')+'>导入本地音乐</button><button class="button" data-action="local-refresh" '+(busy?'disabled':'')+'>检查本地曲库</button></div><p class="public-note">本地文件不转码、不上传、不修改原文件。仅支持普通音频文件，NCM／QMC 等加密文件不能直接播放。浏览器版每首上限512 MB、每次最多1000首；Android不复制音频。</p></section>';
 }
