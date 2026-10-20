@@ -34,6 +34,21 @@ test('existing local library advances to selection even with the platform disabl
   assert.match(generated.querySelector('.listening-steps .current').textContent, /开始听/);
 });
 
+test('the three-step guide keeps one accessible current step before login, after sync and after generation', () => {
+  for (const [options, number] of [
+    [{}, '01'],
+    [{ connected: true }, '01'],
+    [{ connected: true, songCount: 30 }, '02'],
+    [{ connected: true, songCount: 30, queue: [{ id: '1' }] }, '03'],
+  ]) {
+    const page = welcome(options);
+    assert.equal(page.querySelectorAll('.listening-steps li').length, 3);
+    assert.equal(page.querySelectorAll('[aria-current="step"]').length, 1);
+    assert.equal(page.querySelector('[aria-current="step"] > span').textContent, number);
+    assert.equal(page.querySelectorAll('.listening-steps .complete').length, Number(number) - 1);
+  }
+});
+
 test('busy connection cannot be resubmitted and account names cannot inject markup', () => {
   const page = welcome({ connected: true, busy: true, nickname: '<img src=x onerror=alert(1)>' });
   assert.ok(page.querySelector('[data-action="connect-netease"]').disabled);
