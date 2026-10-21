@@ -93,6 +93,7 @@ public final class DesktopLyrics {
         MediaItem current = player.getCurrentMediaItem();
         boolean visible = root != null && root.isAttachedToWindow() && root.isShown();
         return settings.status(permission()).put("visible", visible).put("hasTrack", current != null)
+            .put("showControls", false).put("controlsVisible", false)
             .put("touchThrough", settings.locked).put("editSeconds", Math.max(0, (editUntil - SystemClock.elapsedRealtime() + 999) / 1000))
             .put("testing", previewUntil > System.currentTimeMillis()).put("error", lastError)
             .put("state", OverlayState.describe(permission(), settings.enabled, current != null, visible, screenHidden(), previewUntil > System.currentTimeMillis(), lastError));
@@ -160,7 +161,7 @@ public final class DesktopLyrics {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(pixels(8), pixels(4), pixels(8), pixels(4));
         root.setElevation(pixels(6));
-        root.setContentDescription("随听桌面歌词，默认穿透点击，在个人主页调整位置或关闭");
+        root.setContentDescription("随听桌面歌词，歌词文字穿透点击，播放器可直接开关和调整");
         controls = new LinearLayout(context);
         controls.setGravity(Gravity.CENTER_VERTICAL);
         title = new DragHandle(context);
@@ -350,7 +351,7 @@ public final class DesktopLyrics {
             if (root != null) {
                 text(title, "拖动歌词 · " + Math.max(1, (editUntil - SystemClock.elapsedRealtime() + 999) / 1000) + "秒");
                 text(lyric, "切到手机桌面，检查这行是否还在");
-                text(translation, "默认穿透点击；在个人主页调整或关闭");
+                text(translation, "文字穿透点击；播放器可直接开关或调整");
                 translation.setVisibility(settings.showTranslation ? View.VISIBLE : View.GONE);
                 text(nextLyric, "下一行歌词会显示在这里");
                 nextLyric.setVisibility(settings.lines == 2 ? View.VISIBLE : View.GONE);
@@ -381,6 +382,7 @@ public final class DesktopLyrics {
         clampPosition();
         if (previousX != layout.x || previousY != layout.y || previousWidth != layout.width) updateLayout();
     }
+
 
     private final Runnable tick = new Runnable() {
         @Override public void run() {

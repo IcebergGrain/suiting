@@ -1,12 +1,14 @@
+import { isPlayableSongId } from '../src/song-id.mjs';
 import { normalizePlaybackPreferences, shuffledPlaybackIds } from '../src/playback.mjs';
-import { playableSongs } from '../src/library.mjs';
+import { playableSongs, songArtists } from '../src/library.mjs';
 
-export function createQueuePlayer({ audio, loadTrack, preferences, onChange = () => {}, onTick = () => {}, onHeard = () => {}, now = Date.now, random = Math.random }) {
+export function createQueuePlayer({ audio, loadTrack, preferences, getBlockedArtists = () => null, onChange = () => {}, onTick = () => {}, onHeard = () => {}, now = Date.now, random = Math.random }) {
   const settings = normalizePlaybackPreferences(preferences);
   const state = { song: null, queueId: '', index: -1, count: 0, paused: true, loading: false, ended: false, currentTime: 0, duration: 0, error: '', info: null, ...settings };
   let queue = [];
   let shuffleOrder = [];
   let blockedIds = [];
+  let blockedArtists = {};
   let generation = 0;
   let heardSeconds = 0;
   let recorded = false;
@@ -81,10 +83,10 @@ export function createQueuePlayer({ audio, loadTrack, preferences, onChange = ()
     snapshot: () => ({ ...state, canNext: queue.length > 0 && (state.mode === 'shuffle' || state.mode === 'loop' || state.index + 1 < queue.length) }),
     start: async (songs, index, { autoplay = true, queueId = '' } = {}) => {
       const requested = songs[index]?.id;
-      const valid = playableSongs(songs, blockedIds);
+      const valid = playableSongs(songs, blockedIds, getBlockedArtists() || blockedArtists);
       const selected = index === undefined ? 0 : valid.findIndex(song => song.id === requested);
       if (selected < 0 || !valid.length) return false;
-      queue = valid.map(song => ({ id: String(song.id), title: song.title, artist: song.artist, cover: song.cover }));
+      queue = valid.map(song => ({ id: String(song.id), title: song.title, artist: song.artist, cover: song.cover, ...(song.artists?.length ? { artists: songArtists(song) } : {}) }));
       shuffleOrder = shuffledPlaybackIds(queue.map(song => song.id), queue[selected].id, random);
       state.queueId = String(queueId);
       await open(selected, 0, autoplay);
@@ -107,15 +109,16 @@ export function createQueuePlayer({ audio, loadTrack, preferences, onChange = ()
       if (!queue.length) return;
       const current = state.song?.id;
       const previousIndex = state.index;
-      const remaining = queue.filter(song => !blockedIds.includes(song.id));
+      const remaining = playableSongs(queue, blockedIds, getBlockedArtists() || blockedArtists);
       if (remaining.length === queue.length) return;
       queue = remaining;
-      shuffleOrder = shuffleOrder.filter(id => !blockedIds.includes(id));
+      shuffleOrder = shuffleOrder.filter(id => remaining.some(song => song.id === id));
       if (!remaining.length) return controller.stop();
       const nextIndex = queue.findIndex(song => song.id === current);
       if (nextIndex >= 0) { state.index = nextIndex; state.count = queue.length; changed(); }
       else await open(Math.min(previousIndex, queue.length - 1), 0, !state.paused);
     },
+    syncArtistBlacklist: async artists => { blockedArtists = artists; await controller.syncBlacklist(blockedIds); return true; },
     seek: async seconds => { if (state.duration > 0 && Number.isFinite(seconds)) { audio.currentTime = Math.max(0, Math.min(state.duration, seconds)); resetClock(); sample(); } },
     setQuality: async quality => { const normalized = normalizePlaybackPreferences({ quality }).quality; if (normalized === state.quality) return; state.quality = normalized; if (state.song) await open(state.index, state.currentTime, !state.paused, true); else changed(); },
     setVolume: async volume => { state.volume = normalizePlaybackPreferences({ volume }).volume; audio.volume = state.volume; onTick({ ...state }); },
@@ -124,17 +127,19 @@ export function createQueuePlayer({ audio, loadTrack, preferences, onChange = ()
   return controller;
 }
 
-export function createNativeQueuePlayer({ request, preferences, getBlockedIds = () => [], onRestoreBlacklist = () => {}, onChange = () => {}, onTick = () => {}, onHeard = () => false }) {
+export function createNativeQueuePlayer({ request, preferences, getBlockedIds = () => [], getBlockedArtists = () => ({}), onRestoreBlacklist = () => {}, onRestoreArtistBlacklist = () => {}, onChange = () => {}, onTick = () => {}, onHeard = () => false, onLikesChanged = () => {} }) {
   let state = { song: null, queueId: '', index: -1, count: 0, paused: true, loading: false, ended: false, currentTime: 0, duration: 0, error: '', info: null, ...normalizePlaybackPreferences(preferences) };
   let revision = 0;
   let polling = false;
   let pendingCommands = 0;
   let eventTail = Promise.resolve();
   function accept(result) {
-    const changed = JSON.stringify([state.song, state.queueId, state.index, state.count, state.paused, state.loading, state.ended, state.error, state.info, state.quality, state.mode]) !== JSON.stringify([result.song, result.queueId, result.index, result.count, result.paused, result.loading, result.ended, result.error, result.info, result.quality, result.mode ?? state.mode]);
+    const likesChanged = Number.isSafeInteger(state.likesVersion) && Number.isSafeInteger(result.likesVersion) && state.likesVersion !== result.likesVersion;
+    const changed = JSON.stringify([state.song, state.queueId, state.index, state.count, state.paused, state.loading, state.ended, state.error, state.info, state.quality, state.mode, state.overlay?.enabled, state.overlay?.permission]) !== JSON.stringify([result.song, result.queueId, result.index, result.count, result.paused, result.loading, result.ended, result.error, result.info, result.quality, result.mode ?? state.mode, result.overlay?.enabled, result.overlay?.permission]);
     const { heard, ...safe } = result;
     state = { ...state, ...safe, mode: safe.mode ?? state.mode };
     if (changed) onChange({ ...state }); else onTick({ ...state });
+    if (likesChanged) onLikesChanged();
     if (heard?.length) eventTail = eventTail.catch(() => {}).then(async () => {
       if (await onHeard(heard)) await request('player_ack', { ids: heard.map(event => event.eventId) });
     }).catch(() => {});
@@ -158,7 +163,7 @@ export function createNativeQueuePlayer({ request, preferences, getBlockedIds = 
     snapshot: () => ({ ...state }), refresh,
     start: async (songs, index, { autoplay = true, queueId = '' } = {}) => {
       const requested = songs[index]?.id;
-      const queue = playableSongs(songs, getBlockedIds()).map(song => ({ id: String(song.id), title: String(song.title || '').slice(0, 300), artist: String(song.artist || '').slice(0, 300), cover: String(song.cover || '').slice(0, 1000) }));
+      const queue = playableSongs(songs, getBlockedIds(), getBlockedArtists()).map(song => ({ id: String(song.id), title: String(song.title || '').slice(0, 300), artist: String(song.artist || '').slice(0, 300), cover: String(song.cover || '').slice(0, 1000), ...(song.artists?.length ? { artists: songArtists(song) } : {}) }));
       const selected = index === undefined ? 0 : queue.findIndex(song => song.id === requested);
       if (selected >= 0 && queue.length) return command('player_queue', { queue, index: selected, quality: state.quality, autoplay, queueId });
       return false;
@@ -169,13 +174,17 @@ export function createNativeQueuePlayer({ request, preferences, getBlockedIds = 
     setQuality: quality => command('player_quality', { quality }),
     setVolume: volume => command('player_volume', { volume }),
     setMode: mode => command('player_mode', { mode }),
-    syncBlacklist: ids => command('player_blocklist', { ids: ids.filter(id => /^[1-9]\d{0,17}$/.test(String(id))) }),
+    syncBlacklist: ids => command('player_blocklist', { ids: ids.filter(isPlayableSongId) }),
+    syncArtistBlacklist: artists => command('player_artist_blocklist', { artists: Object.values(artists) }),
     stop: () => command('player_stop'),
     clearHistory: async () => { await eventTail; await command('player_clear_history'); },
     initialize: async () => {
       const result = await request('player_status'); accept(result);
       const stored = await request('player_blocked');
       await onRestoreBlacklist(stored.ids || []);
+      const artistRules = await request('player_blocked_artists');
+      await onRestoreArtistBlacklist(artistRules.artists || []);
+      await controller.syncArtistBlacklist(getBlockedArtists());
       await controller.syncBlacklist(getBlockedIds());
       if (!result.count) { await command('player_quality', { quality: normalizePlaybackPreferences(preferences).quality }); await command('player_volume', { volume: normalizePlaybackPreferences(preferences).volume }); await controller.setMode(normalizePlaybackPreferences(preferences).mode); }
     },

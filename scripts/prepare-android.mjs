@@ -12,7 +12,7 @@ await mkdir(path.join(destination, 'licenses'), { recursive: true });
 await cp(path.join(root, 'public'), destination, { recursive: true });
 // 浏览器可用的共享模块必须在这里登记；新增模块漏登记会让 APK 白屏在启动页。
 // 末尾的校验会检查所有 import 是否都能在包内找到。
-for (const filename of ['easter.mjs', 'extension-host.mjs', 'song-id.mjs', 'features.mjs', 'local-library.mjs', 'shuffle.mjs', 'netease-core.mjs', 'playback.mjs', 'classify.mjs', 'languages.mjs', 'language-service.mjs', 'lyrics.mjs', 'library.mjs', 'queue-session.mjs', 'collection.mjs', 'search.mjs', 'appearance.mjs', 'avatar.mjs', 'plugins.mjs']) {
+for (const filename of ['easter.mjs', 'extension-host.mjs', 'song-id.mjs', 'features.mjs', 'local-library.mjs', 'shuffle.mjs', 'netease-core.mjs', 'playback.mjs', 'classify.mjs', 'languages.mjs', 'language-service.mjs', 'lyrics.mjs', 'library.mjs', 'queue-session.mjs', 'listening-session.mjs', 'collection.mjs', 'search.mjs', 'appearance.mjs', 'avatar.mjs', 'plugins.mjs']) {
   await cp(path.join(root, 'src', filename), path.join(destination, 'src', filename));
 }
 for (const filename of ['NETEASE-LICENSE.txt', 'APACHE-LICENSE.txt', 'NOTICE.txt']) await cp(path.join(root, 'android', filename), path.join(destination, 'licenses', filename));

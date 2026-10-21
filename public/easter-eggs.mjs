@@ -55,11 +55,11 @@ export function createEasterEggs({ player, songs, stream, search, blocked, canPl
       } catch (error) { if (current()) { pause(); status.textContent = error.message || '请点击播放，或选择本机音频。'; } }
     };
     const useSong = async (song, revision = ++session.lookup) => {
-      if (blocked(song.id)) throw new Error('对应歌曲已在黑名单中，不会播放。');
+      if (blocked(song.id, song)) throw new Error('对应歌曲已在黑名单中，不会播放。');
       if (!canPlay(song)) throw new Error('这首歌的音乐来源尚未开启。');
       const info = await stream(song.id);
       if (!current() || revision !== session.lookup) return;
-      if (blocked(song.id) || !canPlay(song)) throw new Error('来源已关闭或歌曲已被拉黑，请重新选择。');
+      if (blocked(song.id, song) || !canPlay(song)) throw new Error('来源已关闭或歌曲已被拉黑，请重新选择。');
       pause(); session.audio.src = info.url; session.custom = true; session.currentSong = song; block.hidden = false;
       await start();
     };
@@ -118,7 +118,7 @@ export function createEasterEggs({ player, songs, stream, search, blocked, canPl
       if (!current()) return;
       session.ready = true;
       const existing = matchingEasterSong(egg, songs());
-      if (existing && !blocked(existing.id) && canPlay(existing)) await useSong(existing);
+      if (existing && !blocked(existing.id, existing) && canPlay(existing)) await useSong(existing);
       else await start();
     } catch (error) {
       if (current()) {

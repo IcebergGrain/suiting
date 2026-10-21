@@ -1,4 +1,4 @@
-import { languageMatches, normalizeLanguages } from './languages.mjs';
+import { languageMatches, normalizeLanguages, songLanguages } from './languages.mjs';
 
 export const moodDefinitions = {
   gentle: { name: '温柔', energy: 25, color: '#789b8b' },
@@ -97,6 +97,11 @@ export function songGenres(song) {
   return [...new Set([...(song.autoGenreKeys || []), song.autoGenre].filter(value => genres.has(value)))];
 }
 
+export function isExcludedByOptions(song, options = {}) {
+  const dimensions = [[songMoods(song), options.excludeMoods], [songGenres(song), options.excludeGenres], [songLanguages(song), options.excludeLanguages]];
+  return dimensions.some(([known, excluded]) => Array.isArray(excluded) && excluded.length && (known.some(value => excluded.includes(value)) || options.excludeUnclassified === true && !known.length));
+}
+
 function features(song) {
   return {
     mood: songMood(song), genre: songGenre(song), moods: songMoods(song), genres: songGenres(song),
@@ -131,7 +136,7 @@ export function getRecentSongs(songs, options = {}) {
     return { song, addedAt, actualDate, order, index };
   });
   values.sort((left, right) => right.addedAt - left.addedAt || (fallback === 'tail' ? right.order - left.order : left.order - right.order) || left.index - right.index);
-  const selected = values.filter(value => fallback !== 'dated-only' || value.addedAt > 0).slice(0, 100);
+  const selected = values.filter(value => fallback !== 'dated-only' || value.addedAt > 0).slice(0, 100).filter(value => !isExcludedByOptions(value.song, options));
   const known = selected.filter(value => value.addedAt > 0).length;
   return { songs: selected.map(value => ({ ...value.song, recentEvidence: value.actualDate ? 'added-at' : value.addedAt ? 'observed' : `playlist-${fallback}`, recentDate: value.addedAt || null })), count: selected.length, knownDateCount: known, fallback, basis: selected.length > 0 && known === selected.length ? 'added-at' : known ? 'mixed' : 'playlist-order' };
 }
@@ -142,6 +147,10 @@ export function normalizeQueueOptions(input = {}) {
     playlistIds: [...new Set((Array.isArray(values.playlistIds) ? values.playlistIds : []).map(identifier).filter(Boolean))],
     languages: [...new Set((Array.isArray(values.languages) ? values.languages : []).filter(value => value === 'unknown' || normalizeLanguages(value).includes(value)))],
     mood: 'all', moods: [...new Set((Array.isArray(values.moods) ? values.moods : [values.mood]).filter(value => moods.has(value)))],
+    excludeMoods: [...new Set((Array.isArray(values.excludeMoods) ? values.excludeMoods : []).filter(value => moods.has(value)))],
+    excludeGenres: [...new Set((Array.isArray(values.excludeGenres) ? values.excludeGenres : []).filter(value => genres.has(value)))],
+    excludeLanguages: [...new Set((Array.isArray(values.excludeLanguages) ? values.excludeLanguages : []).filter(value => normalizeLanguages(value).includes(value)))],
+    excludeUnclassified: values.excludeUnclassified === true,
     genre: 'all', genres: [...new Set((Array.isArray(values.genres) ? values.genres : [values.genre]).filter(value => genres.has(value)))], tag: String(values.tag || '').trim().replace(/\s+/g, ' ').slice(0, 40),
     classificationMode: values.classificationPolicy === 3 && values.classificationMode === 'strict' ? 'strict' : 'balanced',
     includeUnknown: values.classificationPolicy === 3 ? values.includeUnknown !== false : true, classificationPolicy: 3,
@@ -279,7 +288,7 @@ function reorderCurrentQueue(songs, previousQueue, options, random) {
     const current = library.get(songId);
     if (current || snapshot) {
       const song = { ...snapshot, ...current, id: songId };
-      if (!song.blocked && !song.excluded && !song.localExcluded) previous.set(songId, song);
+      if (!song.blocked && !song.excluded && !song.localExcluded && !isExcludedByOptions(song, options)) previous.set(songId, song);
     }
     else missingCount += 1;
   }
@@ -322,7 +331,7 @@ function reorderCurrentQueue(songs, previousQueue, options, random) {
     finalKnownEnergy = energy;
   }
   if (!entries.length) warnings.push('当前还没有队列，请先生成一批歌曲。');
-  else warnings.push('本次仅换当前队列的顺序；范围、氛围、冷却和首数设置将在生成或换一批时应用。');
+  else warnings.push('本次仅换当前候选的顺序，并移除已屏蔽及本次不听的歌曲；正向范围、氛围、冷却和首数设置将在生成或换一批时应用。');
   if (missingCount) warnings.push(`当前曲库无法找到 ${missingCount} 首歌曲的信息，无法对这些 ID 重新排序。`);
   if (hasLargeGap) warnings.push('已保留当前队列的所有歌曲，部分能量过渡超过设定范围；可换一批或提高变化幅度。');
   const unknownCount = queue.filter(song => song.unknown).length;
@@ -331,9 +340,13 @@ function reorderCurrentQueue(songs, previousQueue, options, random) {
 }
 
 export function generateQueue({ songs = [], history = [], previousQueue = [], referenceSongs = [], options = {} } = {}, random = Math.random) {
+  const excludedCount = songs.filter(song => isExcludedByOptions(song, options)).length;
   songs = songs.filter(song => languageMatches(song, options.languages));
+  const recentSongsSource = songs;
+  referenceSongs = referenceSongs.filter(song => !isExcludedByOptions(song, options));
   previousQueue = previousQueue.filter(entry => entry === null || typeof entry !== 'object' || languageMatches(entry, options.languages));
   if (options.refreshMode === 'reorder') return reorderCurrentQueue(songs, previousQueue, options, random);
+  songs = songs.filter(song => !isExcludedByOptions(song, options));
   const now = timestamp(options.now) ?? Date.now();
   const count = Math.floor(boundedNumber(options.count ?? 20, 20, 0, 5000));
   const variation = boundedNumber(options.variation ?? 50, 50, 0, 100);
@@ -352,10 +365,11 @@ export function generateQueue({ songs = [], history = [], previousQueue = [], re
   const priorIds = previousIds(previousQueue);
   const priorSet = new Set(priorIds);
   const warnings = [];
+  if (excludedCount) warnings.push(`本次不听规则排除 ${excludedCount} 首；排除优先于想听、近期比例和参考权重。`);
   const library = uniqueSongs(songs).filter(song => languageMatches(song, options.languages));
   const featureIndex = new Map(library.map(song => [song.id, { id: song.id, ...features(song) }]));
   const classificationIndex = new Map(library.map(song => [song.id, classificationMatch(song, selectedMoods, selectedGenres)]));
-  const recent = getRecentSongs(library, options);
+  const recent = getRecentSongs(recentSongsSource, options);
   const recentRanks = new Map(recent.songs.map((song, index) => [song.id, 1 - index / 200]));
   const recentProfile = listeningProfile(recent.songs, featureIndex);
   const referenceProfile = listeningProfile(referenceSongs, featureIndex);

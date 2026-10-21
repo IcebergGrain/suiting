@@ -6,9 +6,9 @@ export function renderListeningWelcome({ state, songCount, escape }) {
   const title = ready ? '让熟悉的歌，重新心动。' : '你的音乐，从这里开始。';
   const description = connected
     ? ready ? '曲库已就位。选一种心情，把下一首交给随听。' : '账号已连接。下一步，选一个歌单同步到曲库。'
-    : ready ? '曲库已就位，选好心情就能生成。也可以连接网易云，带来更多喜欢的歌。' : '连接网易云，把喜欢的歌带过来。挑选心情，生成属于此刻的播放列表。';
+    : ready ? '曲库已就位，选好心情就能生成。也可以连接网易云，带来更多喜欢的歌。' : '先导入本地音乐，再选范围和心情，生成属于此刻的播放列表。网易云可以按需开启。';
   return `<section class="listening-welcome ${ready ? 'has-library' : ''}" aria-label="开始听歌">
-    <div class="welcome-copy"><span class="welcome-eyebrow">SUI TING / YOUR DAILY MIX</span><h2>${title}</h2><p>${description}</p>
+    <div class="welcome-copy"><h2>${title}</h2><p>${description}</p>
     <div class="welcome-actions"><button class="button primary welcome-connect" data-action="connect-netease" ${state.busy ? 'disabled' : ''}>${connected ? '管理网易云歌单' : '连接网易云音乐'} <span aria-hidden="true">↗</span></button><button class="button welcome-local" data-action="local-import" ${state.busy ? 'disabled' : ''}>导入本地音乐</button></div>
     <span class="welcome-note">${connected ? `已连接 · ${escape(state.status.profile?.nickname || '网易云账号')}` : '扫码登录 · 连接后选择歌单 · 也可以只听本地音乐'}</span></div>
     <div class="welcome-art" aria-hidden="true"><div class="welcome-sleeve"><span>随 听</span><small>SIDE A · PLAY YOUR MOOD</small></div><div class="welcome-vinyl"><span>随听<br>33⅓ RPM</span></div></div>

@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -23,6 +24,12 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
+import androidx.media3.session.SessionCommand;
+import androidx.media3.session.SessionCommands;
+import androidx.media3.session.SessionError;
+import androidx.media3.session.SessionResult;
+import com.google.common.util.concurrent.Futures;
+import com.google.common.util.concurrent.ListenableFuture;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.IOException;
@@ -41,6 +48,7 @@ public final class PlaybackService extends MediaSessionService {
     private ExoPlayer player;
     private MediaSession session;
     private DesktopLyrics desktopLyrics;
+    private NotificationFavorites notificationFavorites;
     private SharedPreferences journal;
     private JSONArray heard = new JSONArray();
     private String quality = "exhigh";
@@ -57,8 +65,11 @@ public final class PlaybackService extends MediaSessionService {
         SuiTingApplication application=(SuiTingApplication)getApplication();
         if(!application.features().enabled("netease")) { sourceGeneration++; sources.clear(); for(int index=player.getMediaItemCount()-1;index>=0;index--) if(!LocalLibrary.validId(player.getMediaItemAt(index).mediaId)) player.removeMediaItem(index); }
         if(!application.features().enabled("desktopLyrics") || !application.features().enabled("lyrics")) { try {desktopLyrics.enable(new JSONObject().put("enabled",false));} catch(Exception ignored) {desktopLyrics.stop();} }
+        if (notificationFavorites != null) notificationFavorites.refresh();
     }
     private volatile java.util.Set<String> blocked = java.util.Collections.emptySet();
+    private volatile ArtistRules artistRules = ArtistRules.empty();
+    private volatile java.util.Set<String> artistBlockedIds = java.util.Collections.emptySet();
 
     public final class LocalBinder extends Binder {
         public PlaybackService service() { return PlaybackService.this; }
@@ -69,15 +80,16 @@ public final class PlaybackService extends MediaSessionService {
         journal = getSharedPreferences("playback-journal", MODE_PRIVATE);
         try { heard = new JSONArray(journal.getString("heard", "[]")); } catch (Exception ignored) {}
         try { blocked = PlaybackRules.blockedIds(new JSONArray(journal.getString("blocked", "[]"))); } catch (Exception ignored) {}
+        try { artistRules = new ArtistRules(new JSONArray(journal.getString("blockedArtists", "[]"))); } catch (Exception ignored) {}
         ResolvingDataSource.Factory factory = new ResolvingDataSource.Factory(
-            new DefaultDataSource.Factory(this, new DefaultHttpDataSource.Factory().setUserAgent("SuiTing/0.1.1-public").setConnectTimeoutMs(15000).setReadTimeoutMs(20000).setAllowCrossProtocolRedirects(false)),
+            new DefaultDataSource.Factory(this, new DefaultHttpDataSource.Factory().setUserAgent("SuiTing/0.1.3-public").setConnectTimeoutMs(15000).setReadTimeoutMs(20000).setAllowCrossProtocolRedirects(false)),
             dataSpec -> {
                 Uri uri = dataSpec.uri;
                 long generation = sourceGeneration;
                 try {
                     if (!"suiting-song".equals(uri.getScheme()) || !"track".equals(uri.getHost())) throw new IllegalArgumentException("Invalid source");
                     String id = PlaybackSource.songId(uri.getLastPathSegment());
-                    if (blocked.contains(id)) throw new IOException("Blocked song");
+                    if (blocked.contains(id) || artistBlockedIds.contains(id)) throw new IOException("Blocked song");
                     if (LocalLibrary.validId(id)) { sources.put(id+":"+quality,((SuiTingApplication)getApplication()).localLibrary().preview(id)); return dataSpec.withUri(((SuiTingApplication)getApplication()).localLibrary().resolve(id)); }
                     if (!((SuiTingApplication)getApplication()).features().enabled("netease")) throw new IOException("网易云插件已关闭");
                     String level = PlaybackSource.quality(uri.getQueryParameter("quality"));
@@ -90,7 +102,7 @@ public final class PlaybackService extends MediaSessionService {
                         if (sources.size() >= 100) sources.clear();
                         sources.put(key, source);
                     }
-                    if (blocked.contains(id)) throw new IOException("Blocked song");
+                    if (blocked.contains(id) || artistBlockedIds.contains(id)) throw new IOException("Blocked song or artist");
                     return dataSpec.withUri(Uri.parse(source.getString("url")));
                 } catch (Exception unavailable) { throw new IOException("音频不可用：本地文件可能已移动或撤权，平台歌曲需检查网络及授权。"); }
             });
@@ -104,6 +116,7 @@ public final class PlaybackService extends MediaSessionService {
             @Override public void onMediaItemTransition(MediaItem item, int reason) {
                 if (!rebuilding) { heardMillis = 0; recorded = false; }
                 error = ""; resetClock();
+                if (notificationFavorites != null) notificationFavorites.refresh();
             }
             @Override public void onPositionDiscontinuity(Player.PositionInfo previous, Player.PositionInfo current, int reason) { resetClock(); }
             @Override public void onIsPlayingChanged(boolean playing) { resetClock(); }
@@ -115,16 +128,24 @@ public final class PlaybackService extends MediaSessionService {
             }
         });
         PendingIntent activity = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        desktopLyrics = new DesktopLyrics(this, player, ((SuiTingApplication) getApplication()).client());
+        notificationFavorites = new NotificationFavorites(this, player, ((SuiTingApplication) getApplication()).client(), desktopLyrics);
         session = new MediaSession.Builder(this, player).setSessionActivity(activity).setCallback(new MediaSession.Callback() {
             @Override public MediaSession.ConnectionResult onConnect(MediaSession mediaSession, MediaSession.ControllerInfo controller) {
                 if (controller.getUid() != android.os.Process.myUid() && !controller.isTrusted() && !mediaSession.isMediaNotificationController(controller)) return MediaSession.ConnectionResult.reject();
                 Player.Commands commands = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.buildUpon()
                     .remove(Player.COMMAND_CHANGE_MEDIA_ITEMS).remove(Player.COMMAND_SET_MEDIA_ITEM).build();
-                return new MediaSession.ConnectionResult.AcceptedResultBuilder(mediaSession).setAvailablePlayerCommands(commands).build();
+                SessionCommands sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS;
+                if (controller.getUid() == android.os.Process.myUid() || mediaSession.isMediaNotificationController(controller)) sessionCommands = sessionCommands.buildUpon().add(NotificationFavorites.COMMAND).add(NotificationFavorites.COMMAND_LYRICS).build();
+                return new MediaSession.ConnectionResult.AcceptedResultBuilder(mediaSession).setAvailablePlayerCommands(commands).setAvailableSessionCommands(sessionCommands).build();
+            }
+            @Override public ListenableFuture<SessionResult> onCustomCommand(MediaSession mediaSession, MediaSession.ControllerInfo controller, SessionCommand command, Bundle arguments) {
+                if (controller.getUid() != android.os.Process.myUid() && !controller.isTrusted() && !mediaSession.isMediaNotificationController(controller)) return Futures.immediateFuture(new SessionResult(SessionError.ERROR_PERMISSION_DENIED));
+                return notificationFavorites.command(command, arguments);
             }
         }).build();
+        notificationFavorites.attach(session);
         addSession(session);
-        desktopLyrics = new DesktopLyrics(this, player, ((SuiTingApplication) getApplication()).client());
         handler.post(tick);
     }
 
@@ -147,10 +168,12 @@ public final class PlaybackService extends MediaSessionService {
     }
 
     private MediaItem item(JSONObject track) throws Exception {
+        if (artistRules.blocks(track)) throw new IllegalArgumentException("Artist is blocked");
         String id = PlaybackSource.songId(track.getString("id"));
         String title = track.optString("title", "未知歌曲");
         String artist = track.optString("artist", "未知歌手");
-        MediaMetadata.Builder metadata = new MediaMetadata.Builder().setTitle(title.substring(0, Math.min(300, title.length()))).setArtist(artist.substring(0, Math.min(300, artist.length())));
+        Bundle credits = new Bundle(); credits.putString("artists", ArtistRules.credits(track).toString());
+        MediaMetadata.Builder metadata = new MediaMetadata.Builder().setTitle(title.substring(0, Math.min(300, title.length()))).setArtist(artist.substring(0, Math.min(300, artist.length()))).setExtras(credits);
         String cover = track.optString("cover");
         if (BridgePolicy.mediaUrlAllowed(cover)) metadata.setArtworkUri(Uri.parse(cover));
         return new MediaItem.Builder().setMediaId(id).setUri("suiting-song://track/" + id + "?quality=" + quality).setMediaMetadata(metadata.build()).build();
@@ -190,6 +213,18 @@ public final class PlaybackService extends MediaSessionService {
                 journal.edit().putString("mode", mode).apply(); break;
             }
             case "player_blocked": return new JSONObject().put("ids", new JSONArray(blocked));
+            case "player_blocked_artists": return new JSONObject().put("artists", artistRules.encoded());
+            case "player_artist_blocklist": {
+                ArtistRules next = new ArtistRules(arguments.getJSONArray("artists"));
+                java.util.Set<String> affected = new java.util.HashSet<>();
+                for (int index = 0; index < player.getMediaItemCount(); index++) if (next.blocks(track(player.getMediaItemAt(index)))) affected.add(player.getMediaItemAt(index).mediaId);
+                artistRules = next; artistBlockedIds = java.util.Collections.unmodifiableSet(affected);
+                journal.edit().putString("blockedArtists", next.encoded().toString()).apply();
+                sources.keySet().removeIf(key -> affected.contains(key.substring(0, key.indexOf(':'))));
+                for (int index = player.getMediaItemCount() - 1; index >= 0; index--) if (affected.contains(player.getMediaItemAt(index).mediaId)) player.removeMediaItem(index);
+                if (player.getMediaItemCount() == 0) { player.pause(); player.stop(); desktopLyrics.stop(); }
+                break;
+            }
             case "player_blocklist": {
                 blocked = PlaybackRules.blockedIds(arguments.getJSONArray("ids"));
                 journal.edit().putString("blocked", new JSONArray(blocked).toString()).apply();
@@ -243,7 +278,7 @@ public final class PlaybackService extends MediaSessionService {
 
     private JSONObject status() throws Exception {
         MediaItem current = player.getCurrentMediaItem();
-        JSONObject track = current == null ? null : new JSONObject().put("id", current.mediaId).put("title", current.mediaMetadata.title).put("artist", current.mediaMetadata.artist).put("cover", current.mediaMetadata.artworkUri);
+        JSONObject track = current == null ? null : track(current);
         JSONObject source = current == null ? null : sources.get(current.mediaId + ":" + quality);
         JSONObject info = source == null ? null : new JSONObject().put("requestedQuality", quality).put("actualLevel", source.opt("actualLevel")).put("bitrate", source.opt("bitrate")).put("format", source.opt("format"));
         long duration = player.getDuration();
@@ -252,7 +287,8 @@ public final class PlaybackService extends MediaSessionService {
             .put("ended", player.getPlaybackState() == Player.STATE_ENDED).put("currentTime", player.getCurrentPosition() / 1000.0)
             .put("duration", duration > 0 && duration != C.TIME_UNSET ? duration / 1000.0 : 0).put("quality", quality).put("volume", player.getVolume()).put("mode", PlaybackRules.modeName(player.getRepeatMode(), player.getShuffleModeEnabled()))
             .put("canNext", player.hasNextMediaItem()).put("canPrevious", player.hasPreviousMediaItem())
-            .put("info", info == null ? JSONObject.NULL : info).put("error", error).put("heard", pendingHeard());
+            .put("info", info == null ? JSONObject.NULL : info).put("error", error).put("heard", pendingHeard())
+            .put("likesVersion", ((SuiTingApplication) getApplication()).client().likesVersion()).put("overlay", desktopLyrics.status());
     }
 
     private JSONArray pendingHeard() throws Exception {
@@ -276,13 +312,21 @@ public final class PlaybackService extends MediaSessionService {
                     } catch (Exception ignored) {}
                 }
             }
+            if (notificationFavorites != null) notificationFavorites.refresh();
             lastClock = clock; lastPosition = position; handler.postDelayed(this, 1000);
         }
     };
 
+    private JSONObject track(MediaItem item) throws Exception {
+        Bundle extras = item.mediaMetadata.extras;
+        return new JSONObject().put("id", item.mediaId).put("title", item.mediaMetadata.title).put("artist", item.mediaMetadata.artist).put("cover", item.mediaMetadata.artworkUri)
+            .put("artists", new JSONArray(extras == null ? "[]" : extras.getString("artists", "[]")));
+    }
+
     @Override public void onDestroy() {
         handler.removeCallbacks(tick);
         if (desktopLyrics != null) desktopLyrics.destroy();
+        if (notificationFavorites != null) notificationFavorites.destroy();
         if (session != null) session.release();
         if (player != null) player.release();
         sources.clear(); super.onDestroy();

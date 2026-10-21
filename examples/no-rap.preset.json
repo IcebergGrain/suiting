@@ -1,0 +1,12 @@
+{
+  "apiVersion": 1,
+  "id": "example.no-rap",
+  "name": "这次不听说唱",
+  "version": "1.0.0",
+  "description": "硬排除已知说唱；保留未分类歌曲。若想连未知风格也排除，可在工作台勾选相应开关。",
+  "kind": "preset",
+  "preset": {
+    "excludeGenres": ["hiphop"],
+    "excludeUnclassified": false
+  }
+}

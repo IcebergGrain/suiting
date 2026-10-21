@@ -34,6 +34,7 @@ public final class NetEaseClient {
     private final String deviceId = UUID.randomUUID().toString().replace("-", "");
     private final SessionPersistence persistence;
     private long sessionEpoch;
+    private long likesVersion;
     private long lastPersisted;
     private java.util.function.BooleanSupplier networkPermission = () -> true;
     public void setNetworkPermission(java.util.function.BooleanSupplier permission) { networkPermission = permission; }
@@ -87,6 +88,13 @@ public final class NetEaseClient {
     }
 
     public JSONObject call(String operation, JSONObject parameters) throws Exception {
+        return callForSession(operation, parameters, -1);
+    }
+
+    public synchronized long sessionVersion() { return sessionEpoch; }
+    public synchronized long likesVersion() { return likesVersion; }
+
+    public JSONObject callForSession(String operation, JSONObject parameters, long expectedSession) throws Exception {
         if (!networkPermission.getAsBoolean()) throw new IllegalStateException("网易云连接插件已关闭。");
         if (!BridgePolicy.operationAllowed(operation)) throw new IllegalArgumentException("Unsupported operation");
         synchronized (this) {
@@ -159,7 +167,8 @@ public final class NetEaseClient {
                 data.put("pid", validId(parameters.get("pid"))).put("trackIds", normalized.toString()).put("op", "update"); break;
             default: throw new IllegalArgumentException("Unsupported network operation");
         }
-        JSONObject body = encryptedRequest(path, data, web);
+        JSONObject body = encryptedRequest(path, data, web, expectedSession);
+        if (operation.equals("like") && body.optInt("code", -1) == 200) { synchronized (this) { likesVersion++; } }
         if (operation.equals("playlist_create") && body.optInt("code", 200) == 200) {
             JSONObject playlist = body.optJSONObject("playlist");
             String id = validId(playlist == null ? body.opt("id") : playlist.opt("id"));
@@ -177,10 +186,13 @@ public final class NetEaseClient {
         return new JSONObject().put("status", 200).put("body", body);
     }
 
-    private JSONObject encryptedRequest(String path, JSONObject data, boolean web) throws Exception {
+    private JSONObject encryptedRequest(String path, JSONObject data, boolean web, long expectedSession) throws Exception {
         Map<String, String> snapshot;
         long epoch;
-        synchronized (this) { snapshot = new LinkedHashMap<>(cookies); epoch = sessionEpoch; }
+        synchronized (this) {
+            if (expectedSession >= 0 && expectedSession != sessionEpoch) throw new java.io.IOException("Session changed");
+            snapshot = new LinkedHashMap<>(cookies); epoch = sessionEpoch;
+        }
         snapshot.put("os", "pc"); snapshot.put("appver", "3.1.29.205117"); snapshot.put("osver", "Windows10");
         snapshot.put("deviceId", deviceId); snapshot.put("channel", "netease"); snapshot.put("__remember_me", "true");
         snapshot.putIfAbsent("_ntes_nuid", deviceId);

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#234d3c">
   <meta name="description" content="本地音乐优先，在自己的曲库中可控随机，可选连接网易云。">
-  <title>随听 0.1.2 · 你的随机，由你调频</title>
+  <title>随听 0.1.3 · 你的随机，由你调频</title>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css">
   <link rel="stylesheet" href="/controls.css">
@@ -16,11 +16,27 @@
   <link rel="stylesheet" href="/easter.css">
   <link rel="stylesheet" href="/public-edition.css">
   <link rel="stylesheet" href="/listening.css">
+  <link rel="stylesheet" href="/compact-player.css">
+  <link rel="stylesheet" href="/layout-refinement.css">
+  <link rel="stylesheet" href="/exclusions.css">
   <script src="/boot.js" defer></script>
   <script type="module" src="/app.mjs"></script>
 </head>
 <body>
-  <div id="app"><main class="boot"><p>随听</p><span>正在打开你的听歌工作台…</span></main></div>
+  <div id="experience">
+    <div id="app"><main class="boot"><p>随听</p><span>正在打开你的听歌工作台…</span></main></div>
+    <div id="mini-player-host"></div>
+    <dialog id="player-dialog" class="player-dialog" aria-labelledby="player-sheet-title">
+      <header class="player-sheet-head"><h2 id="player-sheet-title">随听播放器</h2><button class="button quiet" data-action="close-player">收起播放器</button></header>
+      <div class="player-sheet-tabs" role="group" aria-label="播放器视图"><button class="button" data-action="player-tab" data-section="now" aria-pressed="true">正在播放 · 歌词</button><button class="button" data-action="player-tab" data-section="queue" aria-pressed="false">播放列表</button></div>
+      <div id="player-sheet-body" class="player-sheet-body"></div>
+    </dialog>
+    <dialog id="guide-dialog" class="guide-dialog" aria-labelledby="guide-title">
+      <header class="player-sheet-head"><h2 id="guide-title">第一次用随听？</h2><button class="button quiet" data-action="dismiss-guide">关闭指南</button></header>
+      <div id="guide-body" class="guide-body"></div>
+      <footer class="guide-footer"><p>以后不再自动弹出，想看时点顶部「指南」。生成只更新候选，不会打断正在播放的音乐。</p><button class="button primary" data-action="dismiss-guide">知道了，开始用</button></footer>
+    </dialog>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <audio id="audio" preload="none"></audio>
 </body>

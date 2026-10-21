@@ -49,7 +49,7 @@ test('lyric alignment, original line count and translation reflect persisted nat
 
 test('touch-through is explicit, editing is bounded, and width and position are recoverable', () => {
   const safe = render({ ...base, locked: true });
-  assert.match(safe, /锁定穿透：歌词不接收点击/);
+  assert.match(safe, /锁定穿透：整个歌词窗口不接收点击/);
   assert.match(safe, /调整位置（20秒）/);
   assert.match(safe, /data-action="overlay-reset"/);
   assert.match(safe, /id="overlay-width".*value="72"/);

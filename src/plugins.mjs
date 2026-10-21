@@ -2,7 +2,7 @@ import { shuffledPlaybackIds } from './playback.mjs';
 import { normalizeQueueOptions } from './shuffle.mjs';
 
 const orderingRules = ['reverse', 'artist-spacing', 'shuffle'];
-const presetKeys = ['moods', 'genres', 'languages', 'count', 'countMode', 'cooldownDays', 'variation', 'recentPriority', 'recentTaste', 'referenceStrength', 'classificationMode', 'includeUnknown', 'tag'];
+const presetKeys = ['moods', 'genres', 'languages', 'excludeMoods', 'excludeGenres', 'excludeLanguages', 'excludeUnclassified', 'count', 'countMode', 'cooldownDays', 'variation', 'recentPriority', 'recentTaste', 'referenceStrength', 'classificationMode', 'includeUnknown', 'tag'];
 const label = (value, maximum) => typeof value === 'string' ? value.replace(/[\u0000-\u001f]/gu, '').trim().slice(0, maximum) : '';
 
 export const builtinPlugins = [{

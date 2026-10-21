@@ -22,5 +22,5 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -ToolsDirec
 
 ## 验证范围
 
-现版197项JavaScript、37项JVM通过，Android构建成功、Lint0错误与2项既有提示。Web验证使用合成静音音频与LRC，覆盖导入、刷新恢复、进度、歌词、黑名单与队列替换。
+现版245项JavaScript、60项JVM通过，Android构建成功、Lint0错误与2项既有提示。Web验证使用合成静音音频，覆盖本地导入、播放器、生成候选不替换当前列表、彩蛋自助开关及退出；新增自动测试覆盖浏览器模块可达性、负向排除、歌手规则和通知开关门禁。
 尚需Android设备验证多选与跨重启文档授权、文件移走／撤权、各编码解码、后台／锁屏、悬浮窗位置与点击穿透，以及真实账号登录／版权音源。容器扩展名受支持不保证所有设备解码成功。

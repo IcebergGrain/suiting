@@ -1,3 +1,4 @@
+import { songArtists } from './library.mjs';
 import { isPlayableSongId } from './song-id.mjs';
 
 export const dailyCollectionId = 'local-daily-favorites';
@@ -17,7 +18,7 @@ export function collectRecommendation(sources, song, collected = true, now = Dat
   const existing = previous?.songs || [];
   if (collected && existing.some(entry => String(entry.id) === id)) return sources;
   const remaining = existing.filter(entry => String(entry.id) !== id);
-  const next = collected ? [{ id, title: String(song.title).slice(0, 300), artist: String(song.artist || '').slice(0, 300), album: String(song.album || '').slice(0, 300), cover: String(song.cover || '').slice(0, 1000), duration: Number(song.duration) || 0, collectedAt: now, observedAddedAt: now, addedAt: null }, ...remaining] : remaining;
+  const next = collected ? [{ id, title: String(song.title).slice(0, 300), artist: String(song.artist || '').slice(0, 300), ...(song.artists?.length ? { artists: songArtists(song) } : {}), album: String(song.album || '').slice(0, 300), cover: String(song.cover || '').slice(0, 1000), duration: Number(song.duration) || 0, collectedAt: now, observedAddedAt: now, addedAt: null }, ...remaining] : remaining;
   if (next.length > 5000) throw new Error('本机收藏已达 5000 首，请先整理后再收藏。');
   const source = { id: dailyCollectionId, name: '我的收藏', local: true, origin: 'daily', provider: 'netease', owned: true, owner: { nickname: '仅此设备' }, songs: next, trackCount: next.length, syncedAt: new Date(now).toISOString() };
   return sources.filter(entry => entry.id !== dailyCollectionId).concat(source);

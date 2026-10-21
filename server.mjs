@@ -116,7 +116,7 @@ export function createApp({
     } catch {
       throw new AppError('文件地址无效。', 'NOT_FOUND', 404);
     }
-    const sourceModule = ['/src/easter.mjs', '/src/shuffle.mjs', '/src/playback.mjs', '/src/classify.mjs', '/src/languages.mjs', '/src/extension-host.mjs', '/src/song-id.mjs', '/src/features.mjs', '/src/local-library.mjs', '/src/lyrics.mjs', '/src/library.mjs', '/src/queue-session.mjs', '/src/collection.mjs', '/src/search.mjs', '/src/appearance.mjs', '/src/avatar.mjs', '/src/plugins.mjs'].includes(pathname);
+    const sourceModule = ['/src/easter.mjs', '/src/shuffle.mjs', '/src/playback.mjs', '/src/classify.mjs', '/src/languages.mjs', '/src/extension-host.mjs', '/src/song-id.mjs', '/src/features.mjs', '/src/local-library.mjs', '/src/lyrics.mjs', '/src/library.mjs', '/src/queue-session.mjs', '/src/listening-session.mjs', '/src/collection.mjs', '/src/search.mjs', '/src/appearance.mjs', '/src/avatar.mjs', '/src/plugins.mjs'].includes(pathname);
     const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
     const filename = sourceModule ? path.join(projectRoot, 'src', path.basename(pathname)) : path.resolve(publicDirectory, relative);
     if (!sourceModule && (!filename.startsWith(`${path.resolve(publicDirectory)}${path.sep}`) || pathname.includes('\0') || pathname.includes('\\'))) throw new AppError('没有找到这个文件。', 'NOT_FOUND', 404);

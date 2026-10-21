@@ -192,7 +192,7 @@ public final class MainActivity extends Activity {
             }
             if (operation.equals("ready")) {
                 pageReady = true;
-                JSONObject result = new JSONObject().put("appVersion", "0.1.1-public").put("systemTheme", dark ? "dark" : "light").put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("sdk", Build.VERSION.SDK_INT).put("sharedText", sharedText == null ? JSONObject.NULL : sharedText);
+                JSONObject result = new JSONObject().put("appVersion", "0.1.3-public").put("systemTheme", dark ? "dark" : "light").put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("sdk", Build.VERSION.SDK_INT).put("sharedText", sharedText == null ? JSONObject.NULL : sharedText);
                 sharedText = null; reply(proxy, id, result, null); return;
             }
             if (operation.equals("appearance")) {

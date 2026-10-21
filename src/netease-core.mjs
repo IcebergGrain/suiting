@@ -3,6 +3,7 @@ import { parsePlaylistInput } from './shuffle.mjs';
 import { qualityDefinitions } from './playback.mjs';
 import { classificationFromWiki, AUTO_SOURCE } from './classify.mjs';
 import { normalizeLyrics } from './lyrics.mjs';
+import { songArtists } from './library.mjs';
 
 const shareHosts = new Set(['music.163.com', 'y.music.163.com', 'm.music.163.com', '163cn.tv', 'www.163cn.tv']);
 const cookieAttributes = new Set(['path', 'domain', 'expires', 'max-age', 'secure', 'httponly', 'samesite', 'priority', 'partitioned']);
@@ -70,6 +71,7 @@ function songFrom(song, playlistIds = [], additions = {}) {
     id: identifier(song.id),
     title: String(song.name),
     artist: (song.ar ?? song.artists ?? []).map(artist => String(artist.name ?? '')).filter(Boolean).join(' / ') || '未知歌手',
+    artists: songArtists({ artists: song.ar ?? song.artists ?? [] }).map(({ id, name }) => ({ id, name })),
     album: String(album.name ?? ''),
     cover: String(album.picUrl ?? ''),
     playlistIds,

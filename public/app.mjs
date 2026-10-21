@@ -7,13 +7,15 @@ import { createLocalFiles } from './local-files.mjs';
 import { renderLocalImport, renderFeatureSettings, renderListeningWelcome } from './public-view.mjs';
 import { easterSearchTrigger } from '/src/easter.mjs';
 import { createEasterEggs } from './easter-eggs.mjs';
-import { generateQueue, mergePlaylistSnapshot, getRecentSongs, getClassificationCoverage, getTagCatalog, parseTags, normalizeQueueOptions, moodDefinitions, genreDefinitions, songMoods, songGenres } from '/src/shuffle.mjs';
+import { generateQueue, mergePlaylistSnapshot, getRecentSongs, getClassificationCoverage, getTagCatalog, parseTags, normalizeQueueOptions, moodDefinitions, genreDefinitions, songMoods, songGenres, isExcludedByOptions } from '/src/shuffle.mjs';
 import { songLanguages, languageDefinitions, languageFilterDefinitions, languageMatches, normalizeLanguages, needsLanguageLookup } from '/src/languages.mjs';
 import { renderLanguageControls, renderLanguageEditor } from './language-view.mjs';
+import { renderListeningFilters, renderTrackExplanation } from './listening-view.mjs';
+import { renderSyncPage } from './sync-view.mjs';
 import { demoPlaylist, demoSongs } from './demo.mjs';
 import { qualityDefinitions, playbackModes, normalizePlaybackPreferences, formatTime, qualityDescription } from '/src/playback.mjs';
 import { activeLyricIndex } from '/src/lyrics.mjs';
-import { normalizeBlacklist, applyBlacklist } from '/src/library.mjs';
+import { normalizeBlacklist, applyBlacklist, songArtists, normalizeArtistBlacklist, artistBlacklistMatcher } from '/src/library.mjs';
 import { classificationNeedsUpdate, applyAutoClassification, AUTO_VERSION } from '/src/classify.mjs';
 import { dailyCollectionId, isRemoteSource, collectedSongIds, collectRecommendation } from '/src/collection.mjs';
 import { renderDaily, renderPersonal } from './day-personal.mjs';
@@ -28,6 +30,9 @@ import { queueProviders } from './plugins/registry.mjs';
 import { renderLyricsPanel, lyricFollowPresentation } from './lyrics-view.mjs';
 import { loadGeneratedQueue } from '/src/queue-session.mjs';
 import { createQueuePlayer, createNativeQueuePlayer } from './queue-player.mjs';
+import { createListeningSession, normalizePlayingQueue } from '/src/listening-session.mjs';
+import { renderMiniPlayer, renderPlayingQueue, renderCompactEmpty } from './compact-player-view.mjs';
+import { renderExclusions, renderArtistActions } from './exclusions-view.mjs';
 const mobileRuntime = window.SuiTingMobileRuntime || null;
 
 const localFiles = mobileRuntime ? null : createLocalFiles();
@@ -36,14 +41,17 @@ const moodNames = { all: '不限氛围', ...Object.fromEntries(Object.entries(mo
 const moodColors = { all: '#66836c', ...Object.fromEntries(Object.entries(moodDefinitions).map(([key, value]) => [key, value.color])) };
 const countPresets = [10, 20, 30, 50, 100, 200, 500, 1000];
 const root = document.querySelector('#app');
+const surface = document.querySelector('#experience');
 const audio = document.querySelector('#audio');
 const saved = loadSaved();
 const state = {
+  guideSeen: saved.guideSeen === true, guideOpen: saved.guideSeen !== true, playerExpanded: false, playerTab: 'now', playingQueueVisible: 60,
+  activeQueue: normalizePlayingQueue(saved.activeQueue), activeQueueId: typeof saved.activeQueueId === 'string' ? saved.activeQueueId : '',
   localAvatar: normalizeAvatar(saved.localAvatar), avatarBusy: false, avatarError: '', appearance: normalizeAppearance(saved.appearance), plugins: restorePlugins(saved.plugins), enabledPlugins: Array.isArray(saved.enabledPlugins) ? saved.enabledPlugins.filter(id => typeof id === 'string') : [], providerConsents: saved.providerConsents || {}, nativeDevice: null,
   features: { ...normalizeFeatures(saved.features), netease:false }, lyricImportId: '', tab: 'workspace', sources: saved.sources || [], references: saved.references || [], edits: saved.edits || {}, history: saved.history || [],
   options: normalizeQueueOptions(saved.options),
   playback: normalizePlaybackPreferences(saved.playback),
-  blacklist: normalizeBlacklist(saved.blacklist), libraryCategory: 'recent', libraryPlaylist: null, libraryVisits: saved.libraryVisits || {}, remoteOpen: saved.remoteOpen || { own: true, saved: false },
+  blacklist: normalizeBlacklist(saved.blacklist), artistBlacklist: normalizeArtistBlacklist(saved.artistBlacklist), exclusionsOpen: false, libraryCategory: 'recent', libraryPlaylist: null, libraryVisits: saved.libraryVisits || {}, remoteOpen: saved.remoteOpen || { own: true, saved: false },
   profileSection: 'home', profileSearch: '', profileVisible: 60, overlayOpen: false, overlay: null, overlayError: '', overlayBusy: false,
   daily: null, dailyLoading: false, dailyError: '', dailySection: 'songs', dailyVisible: 60,
   likes: { accountId: '', ids: [], loaded: false }, likesLoading: false, likesError: '', likePending: {},
@@ -79,6 +87,7 @@ let toastTimer;
 let undoTimer;
 let accountEpoch = 0;
 let likesRevision = 0;
+let nativeLikesDirty = false;
 let lastVisibilitySync = 0;
 let draggingProgress = false;
 let classifyEpoch = 0;
@@ -90,15 +99,17 @@ let queueGeneration = 0;
 let queueLoadRevision = 0;
 const player = (mobileRuntime ? createNativeQueuePlayer : createQueuePlayer)({
   audio, request: mobileRuntime?.requestNative, preferences: state.playback,
-  getBlockedIds: () => Object.keys(state.blacklist),
+  getBlockedIds: () => Object.keys(state.blacklist), getBlockedArtists: () => state.artistBlacklist,
+  onRestoreArtistBlacklist: artists => { state.artistBlacklist = normalizeArtistBlacklist([...artists, ...Object.values(state.artistBlacklist)]); state.queue = state.queue.filter(song => !isBlockedSong(song)); state.activeQueue = state.activeQueue.filter(song => !isBlockedSong(song)); persist(); },
   onRestoreBlacklist: ids => {
     const songs = new Map(allSongs().map(song => [song.id, song]));
     for (const id of ids) if (!state.blacklist[id]) state.blacklist[id] = { ...(songs.get(id) || { id, title: '已拉黑歌曲', artist: '' }), blockedAt: Date.now() };
-    state.queue = state.queue.filter(song => !state.blacklist[song.id]); persist();
+    state.queue = state.queue.filter(song => !isBlockedSong(song)); persist();
   },
   loadTrack: (id, quality) => api('/api/preview', { method: 'POST', body: JSON.stringify({ id, quality }) }),
-  onChange: view => { updatePlaybackPreferences(view); state.playingId = view.song && !view.paused && !view.ended ? view.song.id : null; render(); if (state.lyricsOpen) ensureLyrics(view); },
+  onChange: view => { updatePlaybackPreferences(view); if (view.overlay) state.overlay = view.overlay; state.playingId = view.song && !view.paused && !view.ended ? view.song.id : null; render(); if (state.lyricsOpen) ensureLyrics(view); },
   onTick: view => { updatePlaybackPreferences(view); updatePlayerProgress(view); },
+  onLikesChanged: onNativeLikesChanged,
   onHeard: events => {
     const entries = Array.isArray(events) ? events : [events];
     const existing = new Set(state.history.map(event => event.eventId).filter(Boolean));
@@ -107,12 +118,16 @@ const player = (mobileRuntime ? createNativeQueuePlayer : createQueuePlayer)({
   },
 });
 
+const listeningSession = createListeningSession({
+  player, getBlockedIds: () => Object.keys(state.blacklist), getBlockedArtists: () => state.artistBlacklist,
+  onQueue: ({ id, songs }) => { state.activeQueue = songs; state.activeQueueId = id; state.playingQueueVisible = 60; persist(); render(); },
+});
 
 const easterEggs = createEasterEggs({
   player, songs: allSongs, escape,
   stream: id => api('/api/preview', { method: 'POST', body: JSON.stringify({ id, quality: state.playback.quality }) }),
   search: keywords => api('/api/search', { method: 'POST', body: JSON.stringify({ keywords }) }),
-  blocked: id => Boolean(state.blacklist[id]), canPlay: song => !song.demo && canUseSong(song, state.features),
+  blocked: (id, song) => isBlockedSong(song || findSong(id) || { id }), canPlay: song => !song.demo && canUseSong(song, state.features),
   onBlacklist: song => setSongBlocked(song.id, true, song),
 });
 
@@ -122,6 +137,8 @@ function updatePlaybackPreferences(view) {
 }
 
 function updatePlayerProgress(view) {
+  const miniProgress = document.querySelector('.mini-progress');
+  if (miniProgress) miniProgress.style.setProperty('--progress', String(view.duration > 0 ? Math.max(0, Math.min(100, (view.currentTime || 0) / view.duration * 100)) : 0));
   const progress = document.querySelector('#player-progress');
   if (progress && !draggingProgress) { progress.value = view.duration ? Math.round(view.currentTime / view.duration * 1000) : 0; progress.setAttribute('aria-valuetext', `${formatTime(view.currentTime)} / ${formatTime(view.duration)}`); }
   const elapsed = document.querySelector('#player-elapsed');
@@ -143,8 +160,8 @@ function persist() {
   const wasUnsaved = state.unsaved;
   try {
     localStorage.setItem(storageKey, JSON.stringify({
-      version: 1, features: state.features, queueBatchId: state.queueBatchId, lyricFollow: state.lyricFollow, localAvatar: state.localAvatar, appearance: state.appearance, plugins: state.plugins, enabledPlugins: state.enabledPlugins, providerConsents: state.providerConsents, sources: state.sources, references: state.references, edits: state.edits, history: state.history.slice(-10000),
-      options: state.options, playback: state.playback, blacklist: state.blacklist, libraryVisits: state.libraryVisits, remoteOpen: state.remoteOpen, classifyPaused: state.classifyPaused, queue: state.queue.map(song => ({ id: song.id, reason: song.reason, unknown: song.unknown, inRecentPool: song.inRecentPool, classificationKind: song.classificationKind })), selectionReport: state.selectionReport, queueSettings: state.queueSettings, warnings: state.warnings, eligibleCount: state.eligibleCount, autoSync: state.autoSync, lastSync: state.lastSync, exportScope: state.exportScope, exportJob: state.exportJob, exportResult: state.exportResult
+      version: 1, features: state.features, guideSeen: state.guideSeen, activeQueue: state.activeQueue, activeQueueId: state.activeQueueId, queueBatchId: state.queueBatchId, lyricFollow: state.lyricFollow, localAvatar: state.localAvatar, appearance: state.appearance, plugins: state.plugins, enabledPlugins: state.enabledPlugins, providerConsents: state.providerConsents, sources: state.sources, references: state.references, edits: state.edits, history: state.history.slice(-10000),
+      options: state.options, playback: state.playback, blacklist: state.blacklist, artistBlacklist: state.artistBlacklist, libraryVisits: state.libraryVisits, remoteOpen: state.remoteOpen, classifyPaused: state.classifyPaused, queue: state.queue.map(song => ({ id: song.id, reason: song.reason, unknown: song.unknown, inRecentPool: song.inRecentPool, classificationKind: song.classificationKind })), selectionReport: state.selectionReport, queueSettings: state.queueSettings, warnings: state.warnings, eligibleCount: state.eligibleCount, autoSync: state.autoSync, lastSync: state.lastSync, exportScope: state.exportScope, exportJob: state.exportJob, exportResult: state.exportResult
     }));
     state.unsaved = false;
     if (wasUnsaved) queueMicrotask(render);
@@ -225,7 +242,7 @@ function allSongs() {
       });
     }
   }
-  return applyBlacklist([...merged.values()], state.blacklist);
+  return applyBlacklist([...merged.values()], state.blacklist, state.artistBlacklist);
 }
 
 function selectedSongs(ignoreLanguage = false) {
@@ -235,7 +252,7 @@ function selectedSongs(ignoreLanguage = false) {
 
 function selectedReferenceSongs() {
   if (!state.features.netease) return [];
-  return state.references.filter(reference => reference.enabled !== false).flatMap(reference => reference.songs.filter(song => !state.blacklist[song.id]).map(song => ({ ...song, ...state.edits[song.id] })));
+  return state.references.filter(reference => reference.enabled !== false).flatMap(reference => reference.songs.map(song => ({ ...song, ...state.edits[song.id] })).filter(song => !isBlockedSong(song)));
 }
 
 function effectiveMood(song) {
@@ -245,9 +262,30 @@ function effectiveGenre(song) {
   return songGenres(song)[0] || '';
 }
 
+let artistRulesSource;
+let artistRuleMatch = () => null;
+function isBlockedSong(song) {
+  if (artistRulesSource !== state.artistBlacklist) { artistRulesSource = state.artistBlacklist; artistRuleMatch = artistBlacklistMatcher(state.artistBlacklist); }
+  return Boolean(song && (song.blocked || state.blacklist[song.id] || artistRuleMatch(song)));
+}
+async function setArtistBlocked(key, blocked, songId) {
+  const artist = blocked ? songArtists(findSong(songId) || {}).find(entry => entry.key === key) : state.artistBlacklist[key];
+  if (!artist) return;
+  const rules = { ...state.artistBlacklist };
+  if (blocked) rules[artist.key] = { ...artist, blockedAt: Date.now() };
+  else delete rules[key];
+  state.artistBlacklist = normalizeArtistBlacklist(rules);
+  ++queueGeneration; ++queueLoadRevision; state.queueLoading = false;
+  state.queue = state.queue.filter(song => !isBlockedSong(song));
+  state.activeQueue = state.activeQueue.filter(song => !isBlockedSong(song));
+  state.selectionReport = null; persist(); render();
+  const success = await player.syncArtistBlacklist(state.artistBlacklist);
+  if (success === false) { await player.pause(); state.error = '歌手黑名单已保存，但后台队列未确认更新。请停止播放后重新载入队列。'; render(); }
+  toast(blocked ? `已屏蔽 ${artist.name} 的署名歌曲，包含合唱。` : '已解除歌手屏蔽；单独拉黑的歌曲仍保留，队列不会自动恢复。');
+}
 function blacklistButton(song) {
   const blocked = Boolean(state.blacklist[song.id]);
-  return `<button class="button quiet small blacklist-action" data-action="${blocked ? 'unblock-song' : 'block-song'}" data-id="${escape(song.id)}" aria-label="${blocked ? '移出黑名单' : '拉黑'} ${escape(song.title)}">${icon(blocked ? 'check' : 'block')}<span>${blocked ? '恢复' : '拉黑'}</span></button>`;
+  return `<button class="button quiet small blacklist-action" data-action="${blocked ? 'unblock-song' : 'block-song'}" data-id="${escape(song.id)}" aria-label="${blocked ? '移出黑名单' : '拉黑'} ${escape(song.title)}">${icon(blocked ? 'check' : 'block')}<span>${blocked ? '恢复' : '拉黑'}</span></button>${renderArtistActions(song, state.artistBlacklist, escape)}`;
 }
 
 async function setSongBlocked(id, blocked, suppliedSong = null) {
@@ -261,7 +299,8 @@ async function setSongBlocked(id, blocked, suppliedSong = null) {
     const toastElement = document.querySelector('#toast');
     if (toastElement) toastElement.hidden = true;
   } else { delete state.blacklist[id]; state.undoBlacklist = null; }
-  state.queue = state.queue.filter(item => !state.blacklist[item.id]);
+  state.queue = state.queue.filter(item => !isBlockedSong(item));
+  state.activeQueue = state.activeQueue.filter(item => !isBlockedSong(item));
   state.selectionReport = null; classificationQueue.delete(id);
   persist(); render();
   const success = await player.syncBlacklist(Object.keys(state.blacklist));
@@ -314,8 +353,9 @@ async function replaceCurrentBatch(autoplay = false) {
   const queueId = state.queueBatchId;
   state.queueLoading = true; state.queueLoadError = ''; render();
   try {
-    const result = await loadGeneratedQueue(player, state.queue, queueId, autoplay);
-    if (revision !== queueLoadRevision || queueId !== state.queueBatchId) return false;
+    const songs = [...state.queue];
+    const result = await loadGeneratedQueue({ start: listeningSession.start, snapshot: player.snapshot }, songs, queueId, autoplay);
+    if (revision !== queueLoadRevision) return false;
     state.queueLoadError = result.loaded ? '' : result.reason;
     return result.loaded;
   } catch (error) {
@@ -325,14 +365,17 @@ async function replaceCurrentBatch(autoplay = false) {
 }
 
 async function clearQueue() {
-  const generation = ++queueGeneration;
   ++queueLoadRevision; state.queueLoading = false;
-  const stopped = await player.stop();
-  if (generation !== queueGeneration) return;
+  const stopped = await listeningSession.stop();
   if (stopped === false) { state.queueLoadError = '停止没有确认成功，请重试。'; render(); return; }
-  state.queue = []; state.queueBatchId = ''; state.queueLoadError = '';
-  state.queueSettings = null; state.selectionReport = null; state.warnings = [];
-  persist(); render(); toast('播放与本批队列已清空，不影响歌单和收藏。');
+  state.queueLoadError = ''; persist(); render(); toast('播放列表已清空，生成候选仍保留。');
+}
+
+function clearCandidates() {
+  ++queueGeneration;
+  state.queue = []; state.queueBatchId = ''; state.queueSettings = null;
+  state.selectionReport = null; state.warnings = []; persist(); render();
+  toast('候选已清空，当前音乐继续播放。');
 }
 
 function updateLyricProgress(view, force = false) {
@@ -372,7 +415,7 @@ function recentControls(songs) {
 }
 
 function queueSettingsSignature() {
-  return JSON.stringify([state.options, state.edits, Object.keys(state.blacklist), state.sources.map(source => [source.id, source.syncedAt, source.songs.length]), state.references.map(source => [source.id, source.syncedAt, source.enabled]), state.history.length, state.history[state.history.length - 1], state.plugins, state.enabledPlugins]);
+  return JSON.stringify([state.options, state.edits, Object.keys(state.blacklist), Object.keys(state.artistBlacklist), state.sources.map(source => [source.id, source.syncedAt, source.songs.length]), state.references.map(source => [source.id, source.syncedAt, source.enabled]), state.history.length, state.history[state.history.length - 1], state.plugins, state.enabledPlugins]);
 }
 
 function selectionReport() {
@@ -547,7 +590,7 @@ function clearAccountViews() {
 
 function dailySongs() {
   if (!state.status.loggedIn || state.daily?.accountId !== String(state.status.profile?.userId)) return [];
-  return applyBlacklist(state.daily.songs.map(song => ({ ...song, ...state.edits[song.id] })), state.blacklist);
+  return applyBlacklist(state.daily.songs.map(song => ({ ...song, ...state.edits[song.id] })), state.blacklist, state.artistBlacklist);
 }
 
 function collectionSongs() {
@@ -555,7 +598,7 @@ function collectionSongs() {
 }
 
 function findSong(id) {
-  return allSongs().find(song => song.id === id) || dailySongs().find(song => song.id === id) || state.references.flatMap(reference => reference.songs).find(song => song.id === id) || (player.snapshot().song?.id === id ? player.snapshot().song : null) || state.blacklist[id];
+  return allSongs().find(song => song.id === id) || state.activeQueue.find(song => song.id === id) || dailySongs().find(song => song.id === id) || state.references.flatMap(reference => reference.songs).find(song => song.id === id) || (player.snapshot().song?.id === id ? player.snapshot().song : null) || state.blacklist[id];
 }
 
 function collectionButton(song) {
@@ -618,8 +661,20 @@ async function loadLikes() {
     if (result.accountId !== accountId) throw new Error('喜欢列表账号已变化，请重新连接。');
     state.likes = { ...result, loaded: true };
   } catch (error) {
-    if (epoch === accountEpoch) { state.likesError = `网易云喜欢状态未确认：${error.message}`; state.likes.loaded = false; toast(state.likesError); }
-  } finally { if (epoch === accountEpoch) { state.likesLoading = false; render(); } }
+    if (epoch === accountEpoch && revision === likesRevision) { state.likesError = `网易云喜欢状态未确认：${error.message}`; state.likes.loaded = false; toast(state.likesError); }
+  } finally { if (epoch === accountEpoch) { state.likesLoading = false; render(); refreshNativeLikes(); } }
+}
+
+function onNativeLikesChanged() {
+  if (!state.status.loggedIn) return;
+  ++likesRevision; nativeLikesDirty = true; state.likes.loaded = false;
+  refreshNativeLikes();
+}
+
+function refreshNativeLikes() {
+  if (!nativeLikesDirty || !state.status.loggedIn || state.likesLoading || Object.values(state.likePending).some(Boolean)) return;
+  nativeLikesDirty = false;
+  void loadLikes();
 }
 
 async function setOfficialLike(id) {
@@ -639,7 +694,7 @@ async function setOfficialLike(id) {
     const source = state.sources.find(item => isRemoteSource(item) && String(item.owner?.id || item.owner?.userId || '') === accountId && (item.isLiked || item.specialType === 5));
     if (source) { try { if (epoch === accountEpoch) await syncOne(source.id); } catch { if (epoch === accountEpoch) state.likesError = '红心已确认，但本机「我喜欢」快照未更新，请到同步页手动更新。'; } }
   } catch (error) { if (epoch === accountEpoch) { state.likes.loaded = false; state.likesError = `网易云喜欢结果未确认：${error.message} 请刷新核实，未自动重试。`; toast(state.likesError); } }
-  finally { if (epoch === accountEpoch) { delete state.likePending[id]; render(); } }
+  finally { if (epoch === accountEpoch) { delete state.likePending[id]; render(); refreshNativeLikes(); } }
 }
 
 function blacklistSnackbar() {
@@ -655,7 +710,7 @@ async function refreshOverlay() {
   if (!mobileRuntime) return;
   try { state.overlay = await mobileRuntime.requestNative('overlay_status'); state.overlayError = ''; }
   catch (error) { state.overlayError = error.message; }
-  if (state.tab === 'profile') render();
+  if (state.tab === 'profile') render(); else renderChrome();
 }
 
 async function overlayCommand(command, payload = {}) {
@@ -667,7 +722,7 @@ async function overlayCommand(command, payload = {}) {
 }
 
 function exportSongs() {
-  return (state.exportScope === 'collection' ? collectionSongs() : state.queue).filter(song => !state.blacklist[song.id]);
+  return (state.exportScope === 'collection' ? collectionSongs() : state.queue).filter(song => !isBlockedSong(song));
 }
 
 
@@ -718,14 +773,7 @@ function render() {
   if (globalThis.__suitingBootTimer) { clearTimeout(globalThis.__suitingBootTimer); globalThis.__suitingBootTimer = 0; }
   if (activeSearchInput()) {
     renderPending = true;
-    const panel = document.querySelector('.queue-player');
-    if (panel) {
-      const scroll = panel.querySelector('.lyrics-lines')?.scrollTop || 0;
-      panel.outerHTML = playerPanel();
-      const container = document.querySelector('.lyrics-lines');
-      if (container && !state.lyricFollow) container.scrollTop = scroll;
-      else updateLyricProgress(player.snapshot(), true);
-    }
+    renderChrome();
     return;
   }
   renderPending = false;
@@ -734,14 +782,15 @@ function render() {
   draggingProgress = false;
   const headings = { workspace: ['今天想怎么听？', '选范围，挑氛围，生成下一批。'], library: ['我的音乐', '收藏的歌单，熟悉的打开方式。'], sync: ['连接你的音乐', '连接账号 → 同步歌单 → 回到工作台开始听。'], daily: ['日推', '网易云推荐，喜欢就留下。'], profile: ['个人主页', '收藏、黑名单与桌面歌词。'] };
   const [title, subtitle] = headings[state.tab];
-  root.innerHTML = `<div class="shell"><aside class="rail"><a href="#" class="brand" data-tab="workspace"><img src="/icon.svg" alt=""><span>随听 <span class="gpt-label">自由调频</span><small>SUI TING</small></span></a>${nav()}<div class="rail-foot">${icon('shield')}<p>随听 · 0.1.2<br>本地音乐 · 自由调频</p></div></aside><main class="main surface-${state.tab}" aria-busy="${state.busy}"><header class="topbar"><div class="top-title"><h1>${title}</h1><p>${subtitle}</p></div><div class="topbar-actions"><button class="button connection-button" data-action="connect-netease" ${state.busy ? 'disabled' : ''}>${icon('music')}${state.status.loggedIn && state.features.netease ? '网易云 · 已连接' : '连接网易云'}</button><button class="button sync-button" ${!state.features.netease ? 'hidden' : ''} data-action="sync-all" ${state.busy || !state.sources.some(isRemoteSource) ? 'disabled' : ''}>${icon('sync')}同步</button><button class="button account-button" data-tab="profile" aria-label="个人主页"><span class="my-avatar">${state.localAvatar ? `<img src="${escape(state.localAvatar)}" alt="">` : icon('user')}</span><span class="my-label">我的</span></button></div></header>
+  root.innerHTML = `<div class="shell"><aside class="rail"><a href="#" class="brand" data-tab="workspace"><img src="/icon.svg" alt=""><span>随听 <span class="gpt-label">自由调频</span><small>SUI TING</small></span></a>${nav()}<div class="rail-foot">${icon('shield')}<p>随听 · 0.1.3<br>本地音乐 · 自由调频</p></div></aside><main class="main surface-${state.tab}" aria-busy="${state.busy}"><header class="topbar"><div class="top-title"><h1>${title}</h1><p>${subtitle}</p></div><div class="topbar-actions"><button class="button guide-button" data-action="open-guide">指南</button><button class="button connection-button" data-action="connect-netease" ${state.busy ? 'disabled' : ''}>${icon('music')}${state.status.loggedIn && state.features.netease ? '网易云 · 已连接' : '连接网易云'}</button><button class="button sync-button" ${!state.features.netease ? 'hidden' : ''} data-action="sync-all" ${state.busy || !state.sources.some(isRemoteSource) ? 'disabled' : ''}>${icon('sync')}同步</button><button class="button account-button" data-tab="profile" aria-label="个人主页"><span class="my-avatar">${state.localAvatar ? `<img src="${escape(state.localAvatar)}" alt="">` : icon('user')}</span><span class="my-label">我的</span></button></div></header>
   ${state.unsaved ? '<div class="notice error" role="alert">本次更改尚未保存，请先导出备份。<button class="text-button" data-action="export-backup">立即导出</button></div>' : ''}
   ${state.error ? `<div class="notice error" role="alert">${escape(state.error)} <button class="text-button" data-action="dismiss-error">收起</button></div>` : ''}
   ${state.busy ? `<div class="notice" role="status">${escape(state.busyText)}</div>` : ''}
   ${state.classifyProgress ? `<div class="background-progress" role="status">自动分类 ${state.classifyProgress.done} / ${state.classifyProgress.total}<button class="text-button" data-action="pause-classify">${state.classifyPaused ? '当前批结束后暂停' : '暂停'}</button></div>` : ''}
 
-  ${['library', 'daily'].includes(state.tab) ? playerPanel() : ''}${state.tab === 'workspace' ? workspace() : state.tab === 'library' ? library() : state.tab === 'daily' ? renderDaily({ state, songs: dailySongs(), helpers: { escape, icon, trackRow, libraryPlaylistRow } }) : state.tab === 'profile' ? renderPersonal({ state, songs: allSongs(), native: Boolean(mobileRuntime), helpers: { escape, icon, safeImage, trackRow, overlayPanel, queueSaver, renderCustomization: () => (state.profileSection === 'plugins' ? renderFeatureSettings({state,escape}) : '') + renderCustomization({ state, plugins: allPlugins(), providers: queueProviders, helpers: { escape, icon } }) } }) : syncPage()}</main>${nav(true)}${blacklistSnackbar()}<input class="file-input" type="file" id="local-audio-files" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.opus,.aac" multiple><input class="file-input" type="file" id="local-lyrics-file" accept="text/plain,.lrc,.txt"></div>`;
+  ${state.tab === 'workspace' ? workspace() : state.tab === 'library' ? library() : state.tab === 'daily' ? renderDaily({ state, songs: dailySongs(), helpers: { escape, icon, trackRow, libraryPlaylistRow } }) : state.tab === 'profile' ? renderPersonal({ state, songs: allSongs(), native: Boolean(mobileRuntime), helpers: { escape, icon, safeImage, trackRow, overlayPanel, queueSaver, renderCustomization: () => (state.profileSection === 'plugins' ? renderFeatureSettings({state,escape}) : '') + renderCustomization({ state, plugins: allPlugins(), providers: queueProviders, helpers: { escape, icon } }) } }) : syncPage()}</main>${nav(true)}${blacklistSnackbar()}<input class="file-input" type="file" id="local-audio-files" accept="audio/*,.mp3,.flac,.m4a,.wav,.ogg,.opus,.aac" multiple><input class="file-input" type="file" id="local-lyrics-file" accept="text/plain,.lrc,.txt"></div>`;
   restoreSongMenus(root, openMenus);
+  renderChrome();
   const settings = document.querySelector('.player-settings');
   if (settings) settings.open = state.playerOpen;
   const container = document.querySelector('.lyrics-lines');
@@ -749,9 +798,73 @@ function render() {
   else updateLyricProgress(player.snapshot(), true);
 }
 
+
+function currentPlayingSongs() {
+  const view = player.snapshot();
+  return view.queueId && view.queueId === state.activeQueueId ? normalizePlayingQueue(state.activeQueue.filter(song => canUseSong(song, state.features)), Object.keys(state.blacklist), state.artistBlacklist) : [];
+}
+
+function dismissGuide() {
+  state.guideOpen = false; state.guideSeen = true; persist(); renderChrome();
+  document.querySelector('[data-action="open-guide"]')?.focus({ preventScroll: true });
+}
+
+function closePlayer() {
+  state.playerExpanded = false; renderChrome();
+  document.querySelector('[data-action="open-player"]')?.focus({ preventScroll: true });
+}
+
+function renderChrome() {
+  const view = player.snapshot();
+  document.querySelector('#mini-player-host').innerHTML = renderMiniPlayer({ view, candidateCount: state.queue.length, loading: state.queueLoading, native: Boolean(mobileRuntime), overlay: state.overlay, helpers: { escape, icon, safeImage } });
+  const dialog = document.querySelector('#player-dialog');
+  const body = document.querySelector('#player-sheet-body');
+  if (state.playerExpanded) {
+    const active = body.contains(document.activeElement) ? document.activeElement : null;
+    const action = active?.dataset.action;
+    const focusedId = active?.id;
+    const songId = active?.dataset.id;
+    const scroll = body.scrollTop;
+    const lyricScroll = body.querySelector('.lyrics-lines')?.scrollTop || 0;
+    body.innerHTML = state.playerTab === 'queue'
+      ? renderPlayingQueue({ view, songs: currentPlayingSongs(), visibleCount: state.playingQueueVisible, helpers: { escape, icon, blacklistButton } })
+      : playerPanel() + (mobileRuntime ? `<div class="player-overlay-shortcuts"><button class="button" data-action="quick-overlay" ${state.overlayBusy ? 'disabled' : ''}>${state.overlay?.enabled ? '关闭桌面歌词' : '开启桌面歌词'}</button><button class="button" data-action="overlay-options">歌词样式与权限</button></div>${state.overlayError ? `<p class="notice error" role="alert">${escape(state.overlayError)}</p>` : ''}${overlayPanel()}` : '');
+    body.scrollTop = scroll;
+    const settings = body.querySelector('.player-settings');
+    if (settings) settings.open = state.playerOpen;
+    const lines = body.querySelector('.lyrics-lines');
+    if (lines && !state.lyricFollow) lines.scrollTop = lyricScroll;
+    const selector = focusedId ? '#' + CSS.escape(focusedId) : action ? `[data-action="${CSS.escape(action)}"]${songId ? `[data-id="${CSS.escape(songId)}"]` : ''}` : '';
+    if (selector) body.querySelector(selector)?.focus({ preventScroll: true });
+    for (const button of document.querySelectorAll('[data-action="player-tab"]')) button.setAttribute('aria-pressed', String(button.dataset.section === state.playerTab));
+    if (!dialog.open) dialog.showModal();
+    updateLyricProgress(view, true);
+  } else if (dialog.open) dialog.close();
+  const guide = document.querySelector('#guide-dialog');
+  if (state.guideOpen) {
+    document.querySelector('#guide-body').innerHTML = renderListeningWelcome({ state, songCount: allSongs().length, escape });
+    if (!guide.open) guide.showModal();
+  } else if (guide.open) guide.close();
+}
+
+async function quickOverlay() {
+  if (!state.features.lyrics || !state.features.desktopLyrics) { toast('请先在功能插件中开启「歌词与翻译」及「桌面歌词」。'); return; }
+  if (!mobileRuntime || state.overlayBusy) return;
+  await refreshOverlay();
+  if (!state.overlay?.permission) {
+    state.playerExpanded = true; state.playerTab = 'now'; state.overlayOpen = true;
+    state.overlayError = '首次使用需要系统「显示在其他应用上层」权限。授权后，返回这里即可一键开关。';
+    renderChrome(); document.querySelector('.player-dialog .overlay-panel')?.scrollIntoView({ block: 'start' }); return;
+  }
+  await overlayCommand('overlay_enable', { enabled: !state.overlay.enabled });
+}
+
+document.querySelector('#guide-dialog').addEventListener('cancel', event => { event.preventDefault(); dismissGuide(); });
+document.querySelector('#player-dialog').addEventListener('cancel', event => { event.preventDefault(); closePlayer(); });
+
 function playerPanel() {
   const view = player.snapshot();
-  const available = state.queue.some(song => !song.demo && !state.blacklist[song.id] && canUseSong(song,state.features) && isPlayableSongId(song.id));
+  const available = state.queue.some(song => !song.demo && !isBlockedSong(song) && canUseSong(song,state.features) && isPlayableSongId(song.id));
   if (!view.song) return `<section class="queue-player player-idle" aria-label="队列播放器">${state.queueLoadError ? `<p class="notice error" role="alert">${escape(state.queueLoadError)}</p>` : ''}<div>${icon('music')}<span>${available ? '队列已准备好，按顺序接着听' : '生成队列后，在这里连续播放'}</span></div><div><button class="button quiet small" data-action="player-mode">${icon('repeat')}${playbackModes[view.mode || 'order']}</button><button class="button primary" data-action="play-queue" ${!available ? 'disabled' : ''}>${icon('play')}播放</button></div></section>`;
   const cover = safeImage(view.song?.cover);
   const loadedBatch = Boolean(state.queueBatchId && view.queueId === state.queueBatchId && view.count);
@@ -760,13 +873,13 @@ function playerPanel() {
   return `<section class="queue-player" aria-label="队列播放器"><div class="player-stage"><div class="player-heading"><div class="player-art">${cover ? `<img src="${escape(cover)}" alt="" referrerpolicy="no-referrer">` : icon('music')}</div><div class="player-track"><h2>${escape(view.song?.title || '随听播放器')}</h2><p>${escape(view.song?.artist || '选好一批歌，按自己的节奏听。')}</p><span>${view.count ? `${view.index + 1} / ${view.count} 首 · ${view.error ? '播放中断' : view.loading ? '正在连接' : view.ended ? '本批已播完' : view.paused ? '已暂停' : '播放中'}` : '尚未载入队列'}</span></div></div>${state.features.lyrics && state.lyricsOpen ? lyricsPanel(view) : '<p class="lyric-hidden">可在功能插件开启歌词，再导入 LRC 或读取平台歌词。</p>'}</div>
   <div class="player-timeline"><label class="sr-only" for="player-progress">播放进度</label><input id="player-progress" type="range" min="0" max="1000" value="${view.duration ? Math.round(view.currentTime / view.duration * 1000) : 0}" aria-valuetext="${formatTime(view.currentTime)} / ${formatTime(view.duration)}" ${!view.duration ? 'disabled' : ''}><div class="player-time"><span id="player-elapsed">${formatTime(view.currentTime)}</span><span id="player-duration">${formatTime(view.duration)}</span></div></div>
   <div class="player-transport"><button class="icon-button" data-action="player-previous" aria-label="上一首" ${!view.song ? 'disabled' : ''}>${icon('previous')}</button><button class="button primary player-toggle" data-action="player-toggle" aria-label="${view.paused || view.ended ? '播放' : '暂停'}" ${!view.song && !available ? 'disabled' : ''}>${icon(view.paused || view.ended ? 'play' : 'pause')}<span>${view.paused || view.ended ? '播放' : '暂停'}</span></button><button class="icon-button" data-action="player-next" aria-label="下一首" ${!canNext ? 'disabled' : ''}>${icon('next')}</button></div>
-  <div class="player-secondary"><button class="button quiet small" data-action="player-mode" aria-label="切换播放模式，当前${playbackModes[mode]}">${icon(mode === 'shuffle' ? 'shuffle' : 'repeat')}${playbackModes[mode]}</button><button class="button quiet small" data-action="toggle-lyrics" aria-expanded="${state.lyricsOpen}" ${!view.song || !state.features.lyrics ? 'disabled' : ''}>歌词</button>${collectionButton(view.song)}${officialLikeButton(view.song)}${blacklistButton(view.song)}${mobileRuntime && state.features.desktopLyrics ? '<button class="button quiet small" data-action="profile-overlay">桌面歌词</button>' : ''}<button class="button quiet small queue-load-action" data-action="play-queue" ${!available || state.queueLoading || loadedBatch ? 'disabled' : ''}>${state.queueLoading ? '正在替换…' : loadedBatch ? '本批已载入' : '替换并播放本批'}</button><button class="button quiet small" data-action="clear-queue">清空队列</button></div>
-  <p class="queue-session-note" role="status">${loadedBatch ? `播放器已载入本批 ${view.count} 首，新队列会完整替换旧队列。` : '播放器当前是其他来源；生成新批次会替换它。'}</p>${state.queueLoadError ? `<p class="notice error" role="alert">${escape(state.queueLoadError)}</p>` : ''}
+  <div class="player-secondary"><button class="button quiet small" data-action="player-mode" aria-label="切换播放模式，当前${playbackModes[mode]}">${icon(mode === 'shuffle' ? 'shuffle' : 'repeat')}${playbackModes[mode]}</button><button class="button quiet small" data-action="toggle-lyrics" aria-expanded="${state.lyricsOpen}" ${!view.song || !state.features.lyrics ? 'disabled' : ''}>歌词</button>${collectionButton(view.song)}${officialLikeButton(view.song)}${blacklistButton(view.song)}<button class="button quiet small queue-load-action" data-action="play-queue" ${!available || state.queueLoading || loadedBatch ? 'disabled' : ''}>${state.queueLoading ? '正在替换…' : loadedBatch ? '本批已载入' : '替换并播放本批'}</button><button class="button quiet small" data-action="clear-queue">停止并清空播放列表</button></div>
+  <p class="queue-session-note" role="status">${loadedBatch ? `播放器正使用这批 ${view.count} 首，生成新候选不会打断它。` : '播放器仍使用原列表；新候选需要手动点击播放才替换。'}</p>${state.queueLoadError ? `<p class="notice error" role="alert">${escape(state.queueLoadError)}</p>` : ''}
   ${view.error ? `<p class="notice error" role="alert">${escape(view.error)}</p>` : ''}
-  <details class="player-settings"><summary>音质与播放设置<span>${escape(isLocalSongId(view.song?.id) ? '原文件' : qualityDefinitions[view.quality]?.name.split(' · ')[0] || '极高')}</span></summary><div class="player-settings-body"><div><label for="player-quality">平台音质请求（本地使用原文件）</label><select id="player-quality" ${isLocalSongId(view.song?.id) ? 'disabled' : ''}>${Object.entries(qualityDefinitions).map(([value, item]) => `<option value="${value}" ${view.quality === value ? 'selected' : ''}>${item.name}</option>`).join('')}</select><p class="player-quality-actual">${escape(qualityDescription(view.info))}</p></div><div><label for="player-volume">应用音量</label><input id="player-volume" type="range" min="0" max="100" value="${Math.round(view.volume * 100)}" aria-valuetext="${Math.round(view.volume * 100)}%"></div><p class="tiny-note player-explanation">音质独立于网易云设置，以实际返回与账号权限为准，不保证设备输出无损。歌词缺失不影响播放。顺序播放到末尾停止，单曲循环重复当前歌，列表循环整批重播；随机播放只洗牌已载入的队列，每轮不重复，循环使用该随机顺序。切歌按钮仍可手动切歌。</p><p class="tiny-note player-explanation">生成成功会替换已载入队列，暂停时保持暂停，播放中从新批次首曲开始；拉黑会立即移出播放队列。实际播放满 15 秒计入冷却，拖动进度不算。</p></div></details></section>`;
+  <details class="player-settings"><summary>音质与播放设置<span>${escape(isLocalSongId(view.song?.id) ? '原文件' : qualityDefinitions[view.quality]?.name.split(' · ')[0] || '极高')}</span></summary><div class="player-settings-body"><div><label for="player-quality">平台音质请求（本地使用原文件）</label><select id="player-quality" ${isLocalSongId(view.song?.id) ? 'disabled' : ''}>${Object.entries(qualityDefinitions).map(([value, item]) => `<option value="${value}" ${view.quality === value ? 'selected' : ''}>${item.name}</option>`).join('')}</select><p class="player-quality-actual">${escape(qualityDescription(view.info))}</p></div><div><label for="player-volume">应用音量</label><input id="player-volume" type="range" min="0" max="100" value="${Math.round(view.volume * 100)}" aria-valuetext="${Math.round(view.volume * 100)}%"></div><p class="tiny-note player-explanation">音质独立于网易云设置，以实际返回与账号权限为准，不保证设备输出无损。歌词缺失不影响播放。顺序播放到末尾停止，单曲循环重复当前歌，列表循环整批重播；随机播放只洗牌已载入的队列，每轮不重复，循环使用该随机顺序。切歌按钮仍可手动切歌。</p><p class="tiny-note player-explanation">生成只更新候选；点击「播放这批」才替换当前列表。拉黑会立即移出播放队列。实际播放满 15 秒计入冷却，拖动进度不算。</p></div></details></section>`;
 }
 function workspace() {
-  if (!allSongs().length) return `${renderListeningWelcome({state,songCount:0,escape})}<section class="first-listen" aria-label="随听使用说明"><div><span class="section-kicker">A LITTLE LESS SKIP, A LITTLE MORE MUSIC</span><h2>把选歌交给心情。</h2><p>从你的歌单里挑一批此刻想听的歌。可以避开最近听过的，也可以多听一点新收藏。</p></div><div class="first-listen-example"><strong>比如，今晚想听…</strong><p>我喜欢的音乐 / 安静、治愈 / 20 首</p><button class="button" data-action="demo">先体验示例曲库</button><small>示例只展示选歌规则，不含可播放音频。</small></div></section>`;
+  if (!allSongs().length) return renderCompactEmpty();
   const songs = selectedSongs();
   const selectedMoods = state.options.moods;
   const moodTitle = selectedMoods.length ? `${selectedMoods.slice(0, 3).map(mood => moodNames[mood]).join(' · ')}，一起听。` : '你的下一批好歌';
@@ -774,18 +887,18 @@ function workspace() {
   const coverage = getClassificationCoverage(songs, state.options);
   const selected = state.options.playlistIds;
   const available = songs.filter(song => !song.blocked).length;
-  return `${renderListeningWelcome({state,songCount:allSongs().length,escape})}<div class="source-strip">${icon('library')}<span>${activeSources().length} 个歌单 · 可选 ${available} 首</span><button class="text-button" data-tab="sync">管理同步</button></div>
-  <div class="workspace"><section class="tuning" aria-label="随机设置"><div class="tuning-head"><span class="section-kicker">MAKE YOUR MIX</span><h2>今天，听点什么？</h2><span>选好范围和心情，就可以开始。</span></div>
+  return `<div class="source-strip">${icon('library')}<span>${activeSources().length} 个歌单 · 可选 ${available} 首</span><button class="text-button" data-tab="sync">管理同步</button></div>
+  <div class="workspace"><section class="tuning" aria-label="随机设置"><div class="tuning-head"><h2>随机设置</h2></div>
   <div class="control-group"><details class="scope-picker" data-detail="scope-picker" ${state.scopePickerOpen || state.scopeImportOpen ? 'open' : ''}><summary><strong>从哪里挑歌</strong><span>${selected.length ? escape(state.sources.filter(item => selected.includes(String(item.id))).map(item => item.name).join(' / ')) : '全部曲库'} · ${available} 首可选</span></summary><div class="scopes"><button class="chip ${!selected.length ? 'selected' : ''}" data-action="scope-all" aria-pressed="${!selected.length}">全部曲库</button>${activeSources().map(item => `<button class="chip ${selected.includes(String(item.id)) ? 'selected' : ''}" data-action="scope" data-id="${escape(item.id)}" aria-pressed="${selected.includes(String(item.id))}"><span>${escape(item.name)}</span></button>`).join('')}<button class="chip add" data-action="local-import">${icon('plus')}本地音乐</button>${state.features.netease ? '<button class="chip add" data-action="toggle-scope-import">网易云歌单</button>' : ''}</div>${state.scopeImportOpen ? playlistLinkForm('scope') : ''}</details></div>
   <div class="control-group"><div class="control-title"><strong>此刻的氛围</strong><span>可多选</span></div><div class="moods" role="group" aria-label="氛围多选">${Object.entries(moodNames).map(([mood, name]) => { const active = mood === 'all' ? !selectedMoods.length : selectedMoods.includes(mood); return `<button class="mood ${mood === 'all' ? 'all' : ''} ${active ? 'selected' : ''}" data-action="mood" data-mood="${mood}" aria-pressed="${active}"><span class="mood-dot" style="--mood:${moodColors[mood]}"></span>${mood === 'all' ? '不限氛围' : name}</button>`; }).join('')}</div></div>
-  <div class="control-group"><details class="listening-filters" data-detail="filters" ${state.filtersOpen ? 'open' : ''}><summary>风格与语言<span>想听得更具体？展开筛选</span></summary><div class="filter-body">${genreControls()}${renderLanguageControls({ state, songs: selectedSongs(true).filter(song => !song.blocked), escape })}</div></details></div>
+  <div class="control-group">${renderExclusions({ state, moodNames, genreDefinitions, languageDefinitions, escape })}</div>
+  <div class="control-group">${renderListeningFilters({ state, escape, content: genreControls() + renderLanguageControls({ state, songs: selectedSongs(true).filter(song => !song.blocked), escape }) })}</div>
   <div class="control-group"><div class="select-pair"><div><label for="count">这次听几首</label><select id="count">${countPresets.map(count => `<option value="${count}" ${state.options.countMode === 'preset' && Number(state.options.count) === count ? 'selected' : ''}>${count} 首</option>`).join('')}<option value="custom" ${state.options.countMode === 'custom' ? 'selected' : ''}>自定义数量</option><option value="all" ${state.options.countMode === 'all' ? 'selected' : ''}>范围内全部</option></select></div><div><label for="cooldown">最近听过的</label><select id="cooldown">${[[0, '不避开'], [1, '避开 1 天'], [3, '避开 3 天'], [7, '避开 7 天']].map(([days, text]) => `<option value="${days}" ${Number(state.options.cooldownDays) === days ? 'selected' : ''}>${text}</option>`).join('')}</select></div></div>${state.options.countMode === 'custom' ? `<label class="slider-label" for="custom-count">自定义数量（1–5000）</label><input id="custom-count" class="text-input" type="number" min="1" max="5000" step="1" required value="${state.options.count}">` : ''}</div>
-  <div class="control-group generate-group"><button class="button primary generate" data-action="generate" ${!available || state.busy ? 'disabled' : ''}>${icon('shuffle')}生成随机队列${icon('arrow')}</button><div class="classification-brief"><span>氛围可用 ${coverage.moodKnown} / ${coverage.total} 首</span><button class="text-button" data-action="show-classification">${state.classifyProgress ? `正在分类 ${state.classifyProgress.done}/${state.classifyProgress.total}` : '补全分类'}</button></div><p class="extension-status">${state.enabledPlugins.length ? `已启用 ${state.enabledPlugins.length} 个重排扩展；只影响下次生成。` : '生成后替换播放器队列；暂停时不会自动播放。'}</p></div>
   <div class="control-group advanced-group"><details class="workbench-advanced" data-detail="advanced" ${state.advancedOpen ? 'open' : ''}><summary>精细调频与分类<span>近期比例 · 参考歌单 · 标签 · 分类</span></summary><div class="advanced-settings"><div class="range-control"><div class="control-title"><label for="variation">听感变化</label><span id="variation-value">${state.options.variation}%</span></div><input id="variation" type="range" min="0" max="100" value="${state.options.variation}"><div class="range-labels"><span>更连贯</span><span>更有惊喜</span></div></div>${recentControls(songs)}${referenceControls()}${tagControls()}${classificationControls(coverage)}${autoClassifyPanel(songs)}</div></details></div>
-
-  </section><section class="queue" aria-label="随机结果"><div class="record-banner"><div class="record ${state.playingId ? 'playing' : ''}" aria-hidden="true"><div class="record-label">随 听<br>SIDE A</div></div><div class="record-copy"><h2>${escape(moodTitle)}</h2><p>${state.queue.length ? `${state.queue.length} 首已就位，看看这次遇见谁。` : '熟悉的曲库，也可以有新的打开方式。'}</p><p class="banner-note">${demo ? '示例用于体验规则；真实歌单可在同步页连接。' : '自动播放次数不会变成偏好加分。'}</p></div></div>
-    <div class="queue-toolbar"><div class="queue-heading"><h2>接下来听</h2><span>${state.queue.length ? `${state.queue.length} 首` : '等待调频'}</span></div><div class="queue-tools"><button class="button quiet small" data-action="reorder" ${!state.queue.length || state.busy ? 'disabled' : ''}>${icon('shuffle')}换顺序</button><button class="button small" data-action="generate" ${!songs.length || state.busy ? 'disabled' : ''}>换一批${icon('sync')}</button>${state.features.netease ? `<button class="button small" data-action="toggle-playlist-export" ${!state.queue.length || state.busy || state.queue.some(song=>isLocalSongId(song.id)) ? 'disabled' : ''}>${icon('plus')}保存到网易云</button>` : ''}</div></div>
-    <div class="queue-batch-actions"><button class="button quiet small" data-action="clear-queue" ${!state.queue.length && !player.snapshot().song ? 'disabled' : ''}>清空队列</button></div>${queueSaver()}${playerPanel()}
+  <div class="control-group generate-group"><button class="button primary generate" data-action="generate" ${!available || state.busy ? 'disabled' : ''}>${icon('shuffle')}生成随机队列${icon('arrow')}</button><div class="classification-brief"><span>氛围可用 ${coverage.moodKnown} / ${coverage.total} 首</span><button class="text-button" data-action="show-classification">${state.classifyProgress ? `正在分类 ${state.classifyProgress.done}/${state.classifyProgress.total}` : '补全分类'}</button></div><p class="extension-status">${state.enabledPlugins.length ? `已启用 ${state.enabledPlugins.length} 个重排扩展；只影响下次生成。` : '生成只更新候选；点击「播放这批」才切换播放列表。'}</p></div>
+  </section><section class="queue" aria-label="随机结果"><p class="queue-context">${selectedMoods.length ? escape(moodTitle) : '候选不会打断正在播放的歌'}${demo ? ' · 示例无音频' : ''}</p>
+    <div class="queue-toolbar"><div class="queue-heading"><h2>下一批候选</h2><span>${state.queue.length ? `${state.queue.length} 首` : '等待调频'}</span></div><div class="queue-tools"><button class="button quiet small" data-action="reorder" ${!state.queue.length || state.busy ? 'disabled' : ''}>${icon('shuffle')}换顺序</button><button class="button small" data-action="generate" ${!songs.length || state.busy ? 'disabled' : ''}>换一批${icon('sync')}</button><button class="button small" data-action="toggle-playlist-export" ${!state.queue.length || state.busy || !state.features.netease ? 'disabled' : ''}>${icon('plus')}保存到网易云</button></div></div>
+    <button class="button primary candidate-play" data-action="play-queue" ${state.queueLoading || !state.queue.some(song => !song.demo) ? 'disabled' : ''}>${icon('play')}${player.snapshot().song && player.snapshot().queueId !== state.queueBatchId ? '替换播放列表并播放' : '播放这批'}</button><div class="queue-batch-actions"><span class="tiny-note">${player.snapshot().queueId === state.queueBatchId && player.snapshot().song ? '播放器正在使用这一批' : '只生成候选，不打断正在播放的音乐'}</span><button class="button quiet small" data-action="clear-candidates" ${!state.queue.length ? 'disabled' : ''}>清空候选</button></div>${queueSaver()}
     <p id="queue-settings-note" class="notice" role="status" ${!state.queue.length || state.queueSettings === queueSettingsSignature() ? 'hidden' : ''}>设置或曲库已改变，当前仍是旧队列。请点「生成」或「换一批」应用；「换顺序」不会重新选歌。</p>
     <details class="selection-details"><summary>本批规则与匹配说明</summary>${selectionReport()}${state.warnings.map(warning => `<p class="notice">${escape(warning)}</p>`).join('')}</details>
     ${classificationRecovery()}
@@ -795,7 +908,7 @@ function workspace() {
 }
 function trackRow(entry, index, inLibrary = false) {
   const song = { ...entry };
-  const blocked = Boolean(state.blacklist[song.id] || song.blocked);
+  const blocked = isBlockedSong(song);
   const cover = safeImage(song.cover);
   const link = songLink(song);
   return `<article class="track ${blocked ? 'blocked-track' : ''} ${state.editingId === song.id ? 'focus-song' : ''}" data-song="${escape(song.id)}"><span class="track-number">${String(index + 1).padStart(2, '0')}</span><div class="cover">${cover ? `<img src="${escape(cover)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : icon('music')}</div><div class="song-info"><div class="song-title"><strong>${escape(song.title)}</strong>${blocked ? '<span class="tag">已拉黑</span>' : inLibrary && song.autoSource ? '<span class="tag auto">百科</span>' : ''}</div><p class="song-meta">${escape(song.artist || '未知歌手')}${song.demo ? ' · 合成示例' : isLocalSongId(song.id) ? ' · 本地' : ' · 网易云'}${effectiveGenre(song) ? ` · ${genreDefinitions[effectiveGenre(song)]}` : ''}</p>${inLibrary ? `<p class="song-classification">${escape(songMoods(song).map(mood => moodNames[mood]).join(' / ') || '氛围待分类')} · ${escape(songLanguages(song).map(key => languageDefinitions[key]).join(' / ') || '语种待识别')}</p>` : ''}${!inLibrary && song.reason ? `<details class="track-explanation"><summary>为什么选这首</summary><p class="track-reason">${escape(song.reason)}</p></details>` : ''}</div><div class="song-actions"><button class="icon-button" data-action="preview" data-id="${escape(song.id)}" ${song.demo || blocked ? 'disabled' : ''} aria-label="播放 ${escape(song.title)}">${icon(state.playingId === song.id ? 'pause' : 'play')}</button>${collectionButton(song)}<details class="song-more"><summary aria-label="更多：${escape(song.title)}">${icon('more')}</summary><div class="song-menu">${officialLikeButton(song)}${isLocalSongId(song.id) && state.features.lyrics ? `<button class="button quiet" data-action="local-lyrics" data-id="${escape(song.id)}">${icon('lyrics')}导入 LRC 歌词</button>` : ''}${inLibrary ? `<button class="button quiet" data-action="edit" data-id="${escape(song.id)}">${icon('tag')}编辑分类</button>` : !song.dailyRecommendation ? `<button class="button quiet mark-heard" data-action="heard" data-id="${escape(song.id)}">${icon('check')}标记听过</button>` : ''}${blacklistButton(song)}${link ? `<a class="button quiet open-link" href="${link}" target="_blank" rel="noopener noreferrer">${icon('external')}在网易云打开</a>` : ''}</div></details></div></article>${inLibrary && state.editingId === song.id ? tagEditor(song) : ''}`;
@@ -846,13 +959,8 @@ function remoteGroups() {
 }
 
 function syncPage() {
-  if (!state.features.netease) return renderListeningWelcome({state,songCount:allSongs().length,escape}) + publicDataPanel();
-  const profile = state.status.profile;
-  return `<div class="sync-intro"><span class="section-kicker">YOUR MUSIC, TOGETHER</span><h2>${state.status.loggedIn ? '下一步：把歌单带进来' : '扫码连接，开始你的随听'}</h2><p>${state.status.loggedIn ? '在歌单旁点击「同步」，完成后回到随机工作台。这里只读取歌单信息，不下载音频。' : '先在账号卡片点击「创建登录二维码」，再用手机网易云音乐扫码确认。'}</p><div class="actions">${state.status.loggedIn ? '<button class="button primary" data-tab="workspace">去随机工作台</button>' : `<button class="button primary" data-action="start-account-login" ${state.busy ? 'disabled' : ''}>生成登录二维码</button>`}<button class="button" data-action="local-import">导入本地音乐</button></div></div><div class="sync-grid ${state.status.loggedIn ? 'is-connected' : 'is-signed-out'}"><div><section class="panel"><div class="panel-head"><div><h2>从你的网易云同步</h2><p>登录后列出你的歌单，包括「我喜欢」和私密歌单。</p></div>${state.status.loggedIn ? `<button class="button small" data-action="load-playlists" ${state.busy ? 'disabled' : ''}>${icon('sync')}刷新列表</button>` : ''}</div>${state.status.loggedIn ? state.remote.length ? remoteGroups() : '<p class="quiet-copy">点击“刷新列表”读取你的歌单。登录成功不代表所有歌单已经同步。</p>' : `<div class="empty-state" style="border:0;background:var(--paper)">${icon('library')}<h3>先连接账号，再选择歌单</h3><p>私密歌单需要你本人授权。<br>在右侧或上方创建二维码，用网易云 App 扫描。</p></div>`}</section>
-    <section class="panel"><div class="panel-head"><div><h2>也可以粘贴歌单链接</h2><p>在网易云歌单页点“分享 → 复制链接”，粘贴整段分享文字即可。</p></div></div><form id="import-form" class="inline-form"><input class="text-input" id="playlist-input" placeholder="歌单分享文字、链接或歌单 ID" aria-label="网易云歌单链接" required maxlength="3000"><button class="button primary" type="submit" ${state.busy ? 'disabled' : ''}>${icon('plus')}连接歌单</button></form><p class="quiet-copy">支持网易云长链接和 163cn.tv 短链接。私密链接仍需登录对应账号。只有完整读取成功才更新本机快照。</p></section>
-    <section class="panel"><div class="panel-head"><div><h2>同步记录</h2><p>${state.lastSync ? `最近同步：${escape(formatDate(state.lastSync))}` : '连接一个歌单后，这里会记录每次同步的变化。'}</p></div></div>${state.sources.length ? state.sources.map(sourceRow).join('') : '<p class="caption">尚未连接歌单。</p>'}<label class="settings-line" for="auto-sync"><span>打开或返回页面时，更新已连接歌单<br><small>需要有效登录态；页面关闭后不会后台同步。</small></span><input id="auto-sync" type="checkbox" ${state.autoSync ? 'checked' : ''}></label></section>
-</div><div class="login-panel"><section class="panel"><div class="panel-head"><div><h2>网易云账号</h2><p>${state.status.loggedIn ? '已连接。源歌单只读；新建歌单须单独确认。' : '使用官方 App 扫码确认。'}</p></div></div>${state.status.loggedIn ? `<div class="account-profile"><div class="avatar">${safeImage(profile?.avatarUrl) ? `<img src="${escape(safeImage(profile.avatarUrl))}" alt="">` : icon('user')}</div><div><h3>${escape(profile?.nickname || '网易云用户')}</h3><p class="caption">授权已连接</p></div></div><button class="button small" data-action="logout">断开账号</button><p class="quiet-copy">断开后保留本机歌单和分类。想移除私密数据，可在下方清空本机资料。</p>` : `<div class="login-placeholder">${state.qr ? `<img class="qr-image" src="${escape(state.qr.image)}" alt="请用网易云音乐扫一扫登录">${mobileRuntime ? '<div class="qr-actions"><button class="button small" data-action="save-qr">保存二维码</button><button class="button small primary" data-action="open-netease">打开网易云</button></div><p class="tiny-note">保存后打开网易云，用「扫一扫 → 相册」选这张二维码。官方没有给第三方开放一键授权，扫码是唯一能长期保留登录的方式。</p>' : ''}<p class="login-pending">${escape(state.qrMessage || '等待网易云扫码…')}</p><button class="text-button" data-action="login">重新生成二维码</button>` : `${icon('qr')}<p>用网易云扫一扫<br>密码和验证码都不用交给随听</p><button class="button primary" data-action="login" ${state.busy ? 'disabled' : ''}>创建登录二维码</button>`}</div><p class="quiet-copy">在电脑上显示二维码，用安卓网易云扫描最方便。若同一手机的网易云支持相册识码，也可长按保存二维码后识别。</p>`}<p class="disclosure">${mobileRuntime ? '登录凭证用系统 Keystore 加密保存在本机，退出登录或卸载应用即清除；不上传公共代理、不写入系统备份。' : '登录态仅暂存在本机服务内存中，服务重启后需要重新扫码。浏览器不会保存网易云 Cookie。'}</p></section>
-    <section class="panel"><h2>资料留在这台设备</h2><p class="quiet-copy">${mobileRuntime ? '歌单快照、分类和听过记录保存在本应用的私有存储，可离线随机。旧网页可导出 JSON，再在这里导入；不包含登录凭证。卸载会清除资料，请先备份。' : '歌单快照、分类和原型内的听歌记录保存在当前浏览器。电脑和手机之间暂不自动同步；导出的备份含歌单内容，请自己保管。'}</p><div class="export-actions"><button class="button small" data-action="export-backup">${icon('download')}导出备份</button><button class="button small" data-action="import-backup">导入备份</button><input type="file" id="backup-file" class="file-input" accept="application/json,.json"></div><div class="export-actions"><button class="button small danger" data-action="clear-history">清空冷却记录</button><button class="button small danger" data-action="clear-data">清空本机资料</button></div></section><section class="panel"><h3>还没有准备好连接？</h3><p class="quiet-copy">先用 36 首合成示例，试试范围、氛围和“换一批”。示例没有实际音频。</p><div class="export-actions"><button class="button small" data-action="demo">体验示例曲库</button></div></section></div></div>`;
+  if (!state.features.netease) return renderLocalImport({ busy: state.busy, native: Boolean(mobileRuntime), escape }) + publicDataPanel();
+  return renderSyncPage({ state, native: Boolean(mobileRuntime), helpers: { escape, icon, safeImage, remoteGroups, sourceRow, formatDate, isRemoteSource } });
 }
 
 function publicDataPanel() {
@@ -891,7 +999,7 @@ async function toggleFeature(id) {
     if (id === 'easterEggs' && !enabled || id === 'netease' && !enabled) easterEggs.close();
     if(id==='netease' && !enabled) {
       ++accountEpoch;clearTimeout(qrTimer);++classifyEpoch;classificationQueue.clear();state.classifyProgress=null;++languageEpoch;state.languageProgress=null;
-      await player.stop();state.queue=state.queue.filter(song=>canUseSong(song,state.features));
+      if (player.snapshot().song && !canUseSong(player.snapshot().song, state.features)) await listeningSession.stop(); else await player.syncBlacklist(Object.keys(state.blacklist)); state.queue=state.queue.filter(song=>canUseSong(song,state.features)); state.activeQueue=state.activeQueue.filter(song=>canUseSong(song,state.features));
       state.status={loggedIn:false};state.qr=null;state.remote=[];clearAccountViews();state.options.playlistIds=state.options.playlistIds.filter(id=>activeSources().some(source=>String(source.id)===id));
     }
     if(id==='lyrics') {lyricCache.clear();state.lyrics={id:null,status:'idle',lines:[],plain:[]};state.lyricsOpen=enabled;}
@@ -984,14 +1092,13 @@ async function generate(mode = 'new') {
     const local = applyQueuePlugins(result.queue, plugins, enabled);
     const provided = await applyQueueProviders(local.queue, queueProviders, enabled);
     if (generation !== queueGeneration) return;
-    const wasPlaying = Boolean(player.snapshot().song && !player.snapshot().paused && !player.snapshot().ended);
     state.queueBatchId = globalThis.crypto?.randomUUID?.() || `batch-${Date.now()}-${generation}`;
-    state.queue = provided.queue.filter(song => !state.blacklist[song.id]); state.warnings = [...result.warnings, ...local.warnings, ...provided.warnings];
+    state.queue = provided.queue.filter(song => !isBlockedSong(song) && !isExcludedByOptions(song, state.options)); state.warnings = [...result.warnings, ...local.warnings, ...provided.warnings];
     if (enabled.length) state.warnings.push('已启用的扩展只重排本批歌曲，不改变选歌数量；衔接可能与原引擎编排不同。'); state.eligibleCount = result.eligibleCount; state.queueVisible = 60;
     if (mode !== 'reorder') { state.selectionReport = result.selectionReport; state.queueSettings = settings; }
     if (state.queue.length !== result.queue.length) { state.selectionReport = null; state.warnings.push('已移除计算期间新拉黑的歌曲，请重新生成以核对比例。'); }
     persist();
-    if (state.queue.length) { await replaceCurrentBatch(wasPlaying); if (generation === queueGeneration) toast(state.queueLoadError ? '新批次已生成，播放器未确认接收，请查看提示重试。' : `已生成并替换 ${state.queue.length} 首，未记作听过。`); }
+    toast(`已生成 ${state.queue.length} 首候选；当前播放列表未改变。`);
   });
 }
 function useDemo() {
@@ -1112,7 +1219,7 @@ function pollQr(key, startedAt) {
 }
 
 async function preview(id) {
-  if (state.blacklist[id]) { toast('这首歌已拉黑，请到个人主页的黑名单恢复。'); return; }
+  if (isBlockedSong(findSong(id) || { id })) { toast('歌曲或歌手已屏蔽，请到个人主页的黑名单恢复。'); return; }
   const view = player.snapshot();
   if (view.song?.id === id) return view.paused || view.ended ? player.play() : player.pause();
   let songs;
@@ -1120,9 +1227,9 @@ async function preview(id) {
   else if (state.tab === 'profile' && state.profileSection === 'collection') songs = collectionSongs();
   else if (state.tab === 'workspace' && state.queue.some(song => song.id === id)) songs = state.queue;
   else songs = allSongs().filter(song => !state.libraryPlaylist || song.playlistIds.includes(state.libraryPlaylist));
-  songs = songs.filter(song => !state.blacklist[song.id]);
+  songs = songs.filter(song => !isBlockedSong(song));
   const index = songs.findIndex(song => song.id === id);
-  if (index >= 0) await player.start(songs, index);
+  if (index >= 0) await listeningSession.start(songs, index);
 }
 function markHeard(id) {
   state.history.push({ songId: id, playedAt: Date.now(), source: 'manual' }); persist(); toast('已标记听过，下次生成时遵守冷却设置。');
@@ -1158,21 +1265,24 @@ async function restoreBackup(data) {
   state.history = Array.isArray(data.history) ? data.history.slice(-10000) : [];
   state.options = normalizeQueueOptions(data.options);
   if (data.blacklist !== undefined) state.blacklist = normalizeBlacklist(data.blacklist);
+  if (data.artistBlacklist !== undefined) state.artistBlacklist = normalizeArtistBlacklist(data.artistBlacklist);
+  await player.syncArtistBlacklist(state.artistBlacklist);
   await player.syncBlacklist(Object.keys(state.blacklist));
   const sourceIds = new Set(state.sources.map(source => source.id));
   state.options.playlistIds = state.options.playlistIds.filter(id => sourceIds.has(id));
   state.queueSettings = null; state.selectionReport = null;
   state.exportJob = null; state.exportResult = null;
   ++queueGeneration; ++queueLoadRevision; state.queueLoading = false; state.queueBatchId = ''; state.queueLoadError = '';
-  state.queue = []; state.lastSync = data.lastSync || null;
+  state.queue = []; state.activeQueue = []; state.activeQueueId = ''; state.lastSync = data.lastSync || null;
   state.tab = 'library'; persist(); render(); window.scrollTo({ top: 0, behavior: 'instant' }); toast('备份已导入；网易云登录态不会随备份转移。');
 }
 
-root.addEventListener('click', async event => {
+surface.addEventListener('click', async event => {
   const button = event.target.closest('[data-tab], [data-action]');
   if (!button || button.disabled) return;
-  if (button.dataset.tab) { event.preventDefault(); await navigate(button.dataset.tab); return; }
+  if (button.dataset.tab) { event.preventDefault(); if (state.guideOpen) dismissGuide(); await navigate(button.dataset.tab); return; }
   const action = button.dataset.action;
+  if (state.guideOpen && ['local-import', 'connect-netease', 'demo'].includes(action)) dismissGuide();
   const id = button.dataset.id;
   if (action === 'local-import') { if (mobileRuntime) await importLocalFiles(); else document.querySelector('#local-audio-files').click(); }
   else if (action === 'connect-netease') {
@@ -1182,6 +1292,24 @@ root.addEventListener('click', async event => {
   else if (action === 'local-refresh') await perform('正在检查本地曲库…',reloadLocalFiles);
   else if (action === 'toggle-feature') await toggleFeature(button.dataset.feature);
   else if (action === 'local-lyrics') {state.lyricImportId=id;document.querySelector('#local-lyrics-file').click();}
+  else if (action === 'block-artist' || action === 'unblock-artist') await setArtistBlocked(button.dataset.key, action === 'block-artist', id);
+  else if (action === 'exclude-option') {
+    const field = button.dataset.field;
+    if (!['excludeGenres', 'excludeMoods', 'excludeLanguages'].includes(field)) return;
+    const selected = state.options[field] || [];
+    state.options = normalizeQueueOptions({ ...state.options, [field]: selected.includes(button.dataset.value) ? selected.filter(value => value !== button.dataset.value) : [...selected, button.dataset.value] });
+    persist(); render();
+  }
+  else if (action === 'clear-exclusions') { state.options = normalizeQueueOptions({ ...state.options, excludeGenres: [], excludeMoods: [], excludeLanguages: [], excludeUnclassified: false }); persist(); render(); }
+  else if (action === 'open-guide') { state.guideOpen = true; renderChrome(); }
+  else if (action === 'dismiss-guide') dismissGuide();
+  else if (action === 'open-player' || action === 'open-playing-queue') { state.playerExpanded = true; state.playerTab = action === 'open-playing-queue' ? 'queue' : 'now'; renderChrome(); }
+  else if (action === 'close-player') closePlayer();
+  else if (action === 'player-tab') { state.playerTab = button.dataset.section; renderChrome(); }
+  else if (action === 'more-playing') { state.playingQueueVisible += 60; renderChrome(); }
+  else if (action === 'play-active') { const songs = currentPlayingSongs(); const index = songs.findIndex(song => song.id === id); if (index >= 0) await listeningSession.start(songs, index, { queueId: state.activeQueueId }); }
+  else if (action === 'quick-overlay') await quickOverlay();
+  else if (action === 'overlay-options') { state.overlayOpen = !state.overlayOpen; await refreshOverlay(); renderChrome(); }
   else if (action.startsWith('profile-')) {
     if (action === 'profile-sync') await navigate('sync');
     else { state.tab = 'profile'; state.profileSection = action === 'profile-blacklist' ? 'blacklist' : action === 'profile-collection' ? 'collection' : action === 'profile-appearance' ? 'appearance' : action === 'profile-plugins' ? 'plugins' : 'home'; state.profileSearch = ''; state.profileVisible = 60; state.overlayOpen = action === 'profile-overlay'; render(); window.scrollTo({ top: 0, behavior: 'instant' }); if (state.overlayOpen) await refreshOverlay(); }
@@ -1207,8 +1335,8 @@ root.addEventListener('click', async event => {
   else if (action === 'daily-songs' || action === 'daily-playlists') { state.dailySection = action === 'daily-songs' ? 'songs' : 'playlists'; render(); }
   else if (action === 'show-more-daily') { state.dailyVisible += 60; render(); }
   else if (action === 'show-more-profile') { state.profileVisible += 60; render(); }
-  else if (action === 'play-daily') await player.start(dailySongs().filter(song => !state.blacklist[song.id]));
-  else if (action === 'play-collection') await player.start(collectionSongs().filter(song => !state.blacklist[song.id]));
+  else if (action === 'play-daily') await listeningSession.start(dailySongs().filter(song => !isBlockedSong(song)));
+  else if (action === 'play-collection') await listeningSession.start(collectionSongs().filter(song => !isBlockedSong(song)));
   else if (action === 'collection-scope') { state.options.playlistIds = [dailyCollectionId]; await navigate('workspace'); persist(); }
   else if (action === 'collect-song') toggleCollection(id);
   else if (action === 'official-like') await setOfficialLike(id);
@@ -1229,7 +1357,7 @@ root.addEventListener('click', async event => {
   else if (action === 'library-category') { state.tab = 'library'; state.libraryCategory = button.dataset.category; state.libraryPlaylist = null; state.search = ''; state.visibleCount = 60; render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
   else if (action === 'open-library') { state.libraryPlaylist = id; state.libraryVisits[id] = Date.now(); state.search = ''; state.visibleCount = 60; persist(); render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
   else if (action === 'library-back') { state.libraryPlaylist = null; state.search = ''; render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
-  else if (action === 'play-library') await player.start(allSongs().filter(song => song.playlistIds.includes(id)));
+  else if (action === 'play-library') await listeningSession.start(allSongs().filter(song => song.playlistIds.includes(id)));
   else if (action === 'use-library-scope') { state.options.playlistIds = [id]; state.tab = 'workspace'; persist(); render(); window.scrollTo({ top: 0, behavior: 'instant' }); }
   else if (action === 'show-classification') { state.advancedOpen = true; state.classifyOpen = true; render(); document.querySelector('[data-detail="classify"]')?.scrollIntoView({ block: 'center' }); }
   else if (action === 'pause-classify') { state.classifyPaused = true; persist(); render(); }
@@ -1279,8 +1407,9 @@ root.addEventListener('click', async event => {
   else if (action === 'remove-reference') { state.references = state.references.filter(reference => reference.id !== id); persist(); render(); toast('已移除参考歌单，随机曲库不受影响。'); }
   else if (action === 'sync-all') await syncAll();
   else if (action === 'preview') await preview(id);
-  else if (action === 'play-queue') await replaceCurrentBatch(true);
+  else if (action === 'play-queue') { if (player.snapshot().song && player.snapshot().queueId === state.queueBatchId) await player.play(); else await replaceCurrentBatch(true); }
   else if (action === 'clear-queue') await clearQueue();
+  else if (action === 'clear-candidates') clearCandidates();
   else if (action === 'player-toggle') { const view = player.snapshot(); if (!view.song) await replaceCurrentBatch(true); else if (view.paused || view.ended) await player.play(); else await player.pause(); }
   else if (action === 'player-next') await player.next();
   else if (action === 'player-previous') await player.previous();
@@ -1309,19 +1438,19 @@ root.addEventListener('click', async event => {
     const valid = new Set(allSongs().map(song => song.id)); state.queue = state.queue.filter(song => valid.has(song.id)); persist(); render(); toast('已移除本机快照，网易云源歌单未改动。');
   }
   else if (action === 'export-queue') download('随听-本次队列.txt', state.queue.map((song, index) => `${index + 1}. ${song.title} — ${song.artist}\n${songLink(song) || '合成示例，无实际音频'}`).join('\n\n'), 'text/plain');
-  else if (action === 'export-backup') download(`随听-个人版-资料备份-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ version: 1, sources: state.sources, references: state.references, edits: state.edits, history: state.history, blacklist: state.blacklist, localAvatar: state.localAvatar, appearance: state.appearance, plugins: state.plugins, options: state.options, lastSync: state.lastSync }, null, 2));
+  else if (action === 'export-backup') download(`随听-资料备份-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ version: 1, sources: state.sources, references: state.references, edits: state.edits, history: state.history, blacklist: state.blacklist, artistBlacklist: state.artistBlacklist, localAvatar: state.localAvatar, appearance: state.appearance, plugins: state.plugins, options: state.options, lastSync: state.lastSync }, null, 2));
   else if (action === 'import-backup') document.querySelector('#backup-file').click();
   else if (action === 'clear-history') { await player.clearHistory?.(); state.history = []; persist(); toast('已清空本原型的冷却记录。'); }
   else if (action === 'clear-data') {
     if (!confirm('清空当前浏览器的歌单、分类和原型内听歌记录？网易云源歌单不会改变。建议先导出备份。')) return;
     await removeLocalFiles(); ++queueGeneration; ++queueLoadRevision; state.queueLoading = false; state.queueBatchId = ''; state.queueLoadError = '';
     await player.stop(); await player.clearHistory?.();
-    ++languageEpoch; state.languageProgress = null; ++classifyEpoch; classificationQueue.clear(); state.classifyProgress = null; state.blacklist = normalizeBlacklist(); await player.syncBlacklist([]);
-state.localAvatar = ''; state.avatarError = ''; state.exportJob = null; state.exportResult = null; state.sources = []; state.references = []; state.edits = {}; state.history = []; state.queue = []; state.warnings = []; state.options.playlistIds = []; state.lastSync = null; persist(); render(); toast('已清空本机资料，账号连接可单独断开。');
+    ++languageEpoch; state.languageProgress = null; ++classifyEpoch; classificationQueue.clear(); state.classifyProgress = null; state.blacklist = normalizeBlacklist(); state.artistBlacklist = normalizeArtistBlacklist(); await player.syncArtistBlacklist(state.artistBlacklist); await player.syncBlacklist([]);
+state.activeQueue = []; state.activeQueueId = ''; state.localAvatar = ''; state.avatarError = ''; state.exportJob = null; state.exportResult = null; state.sources = []; state.references = []; state.edits = {}; state.history = []; state.queue = []; state.warnings = []; state.options.playlistIds = []; state.lastSync = null; persist(); render(); toast('已清空本机资料，账号连接可单独断开。');
   }
 });
 
-root.addEventListener('input', event => {
+surface.addEventListener('input', event => {
   if (event.target.id === 'player-progress') { draggingProgress = true; const view = player.snapshot(); document.querySelector('#player-elapsed').textContent = formatTime(view.duration * Number(event.target.value) / 1000); }
   if (event.target.id === 'player-volume') { event.target.setAttribute('aria-valuetext', `${event.target.value}%`); player.setVolume(Number(event.target.value) / 100); }
   if (event.target.id === 'variation') { state.options.variation = Number(event.target.value); document.querySelector('#variation-value').textContent = `${state.options.variation}%`; persist(); }
@@ -1339,23 +1468,23 @@ root.addEventListener('input', event => {
   searchInputs[event.target.id]?.input(event.target.value, event.isComposing);
 });
 
-root.addEventListener('compositionstart', event => searchInputs[event.target.id]?.start());
-root.addEventListener('compositionend', event => searchInputs[event.target.id]?.end(event.target.value));
-root.addEventListener('search', event => { if (searchInputs[event.target.id]) { searchInputs[event.target.id].input(event.target.value); searchInputs[event.target.id].flush(); } });
-root.addEventListener('keydown', event => {
+surface.addEventListener('compositionstart', event => searchInputs[event.target.id]?.start());
+surface.addEventListener('compositionend', event => searchInputs[event.target.id]?.end(event.target.value));
+surface.addEventListener('search', event => { if (searchInputs[event.target.id]) { searchInputs[event.target.id].input(event.target.value); searchInputs[event.target.id].flush(); } });
+surface.addEventListener('keydown', event => {
   if (event.target.closest('.lyrics-lines') && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'].includes(event.key)) setLyricFollow(false);
   if (event.key !== 'Enter' || event.isComposing || event.keyCode === 229 || !searchInputs[event.target.id]) return;
   event.preventDefault(); searchInputs[event.target.id].flush();
   const egg = easterSearchTrigger({ id: event.target.id, value: event.target.value, composing: searchInputs[event.target.id].composing, enabled: state.features.easterEggs });
   if (egg) void easterEggs.open(egg);
 });
-root.addEventListener('focusout', event => {
+surface.addEventListener('focusout', event => {
   if (!searchInputs[event.target.id]) return;
   const id = event.target.id; const value = event.target.value;
   setTimeout(() => { if (searchInputs[id].composing) searchInputs[id].end(value); else if (searchInputs[id].pending) searchInputs[id].flush(); if (renderPending && !activeSearchInput()) render(); }, 0);
 });
 
-root.addEventListener('change', async event => {
+surface.addEventListener('change', async event => {
   if (event.target.id === 'local-audio-files' && event.target.files.length) {const files=[...event.target.files];await importLocalFiles(files);return;}
   if (event.target.id === 'local-lyrics-file' && event.target.files[0]) {
     const file=event.target.files[0], id=state.lyricImportId;
@@ -1366,6 +1495,7 @@ root.addEventListener('change', async event => {
       lyricCache.delete(id);state.lyrics={id:null,status:'idle',lines:[],plain:[]};ensureLyrics(player.snapshot(),true);toast('歌词已绑定这首本地歌曲。');
     });return;
   }
+  if (event.target.id === 'exclude-unclassified') { state.options.excludeUnclassified = event.target.checked; persist(); render(); }
   if (event.target.id === 'appearance') { state.appearance = normalizeAppearance(event.target.value); applyAppearance(); persist(); render(); }
   if (event.target.id === 'plugin-file' && event.target.files[0]) {
     try {
@@ -1426,7 +1556,7 @@ root.addEventListener('change', async event => {
   }
 });
 
-root.addEventListener('submit', async event => {
+surface.addEventListener('submit', async event => {
   if (event.target.id === 'create-playlist-form') { event.preventDefault(); await saveQueueToNetEase(); return; }
   const forms = { 'import-form': ['playlist-input', 'source'], 'scope-import-form': ['scope-input', 'source'], 'reference-import-form': ['reference-input', 'reference'] };
   const form = forms[event.target.id];
@@ -1437,10 +1567,11 @@ root.addEventListener('submit', async event => {
   await perform(form[1] === 'reference' ? '正在读取参考歌单，成功后才保存…' : '正在解析歌单并补齐全部歌曲，成功后才保存…', () => syncOne(input, form[1]));
 });
 
-root.addEventListener('toggle', event => {
+surface.addEventListener('toggle', event => {
   if (event.target.dataset.detail === 'scope-picker') state.scopePickerOpen = event.target.open;
   if (event.target.dataset.detail === 'language-picker') state.languagePickerOpen = event.target.open;
   if (event.target.dataset.detail === 'genre-picker') state.genrePickerOpen = event.target.open;
+  if (event.target.dataset.detail === 'exclusions') state.exclusionsOpen = event.target.open;
   if (event.target.dataset.detail === 'filters') state.filtersOpen = event.target.open;
   if (event.target.dataset.detail === 'advanced') state.advancedOpen = event.target.open;
   if (event.target.dataset.remoteGroup) { state.remoteOpen[event.target.dataset.remoteGroup] = event.target.open; persist(); }
@@ -1450,18 +1581,18 @@ root.addEventListener('toggle', event => {
   if (event.target.dataset.detail === 'classify') state.classifyOpen = event.target.open;
 }, true);
 
-for (const type of ['wheel', 'touchmove', 'pointerdown']) root.addEventListener(type, event => {
+for (const type of ['wheel', 'touchmove', 'pointerdown']) surface.addEventListener(type, event => {
   const container = event.target.closest('.lyrics-lines');
   if (container && (type !== 'pointerdown' || event.target === container)) setLyricFollow(false);
 }, { passive: true });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { player.refresh?.(); if (state.overlayOpen) refreshOverlay(); }
+  if (document.visibilityState === 'visible') { player.refresh?.(); if (mobileRuntime) refreshOverlay(); if (mobileRuntime && state.status.loggedIn) loadLikes(); }
   if (document.visibilityState === 'visible' && state.autoSync && state.status.loggedIn && !state.busy && Date.now() - lastVisibilitySync > 60000) { lastVisibilitySync = Date.now(); syncAll(); }
 });
 
 const hydratedSongs = new Map(allSongs().map(song => [song.id, song]));
-state.queue = state.queue.filter(song => hydratedSongs.has(song.id) && !state.blacklist[song.id]).map(song => ({ ...hydratedSongs.get(song.id), ...song }));
+state.queue = state.queue.filter(song => hydratedSongs.has(song.id) && !isBlockedSong(hydratedSongs.get(song.id))).map(song => ({ ...hydratedSongs.get(song.id), ...song }));
 if (mobileRuntime) {
   const receiveShare = text => {
     if (typeof text !== 'string' || text.length > 3000) return;
@@ -1475,6 +1606,8 @@ if (mobileRuntime) {
     onNativeState: theme => { if (theme === 'dark' || theme === 'light') systemTheme = theme; applyAppearance(false); player.refresh?.(); if (state.overlayOpen) refreshOverlay(); },
     handleBack: () => {
       if (easterEggs.isOpen()) { easterEggs.close(); return true; }
+      if (state.guideOpen) { dismissGuide(); return true; }
+      if (state.playerExpanded) { closePlayer(); return true; }
       if (state.editingId) state.editingId = null;
       else if (state.libraryPlaylist && state.tab === 'library') state.libraryPlaylist = null;
       else if (state.tab === 'profile' && (state.profileSection !== 'home' || state.overlayOpen)) { state.profileSection = 'home'; state.overlayOpen = false; }
@@ -1485,7 +1618,7 @@ if (mobileRuntime) {
     },
     setKeyboardVisible: visible => document.documentElement.classList.toggle('native-keyboard', visible),
   };
-  root.addEventListener('click', event => {
+  surface.addEventListener('click', event => {
     const link = event.target.closest('a[href]');
     if (!link || !/^https:\/\/(?:[\w-]+\.)?music\.163\.com\//.test(link.href)) return;
     event.preventDefault();
@@ -1497,9 +1630,10 @@ if (mobileRuntime) {
 applyAppearance();
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => { if (!mobileRuntime) { systemTheme = event.matches ? 'dark' : 'light'; applyAppearance(false); } });
 render();
-if (!mobileRuntime) player.syncBlacklist(Object.keys(state.blacklist));
+if (!mobileRuntime) { player.syncArtistBlacklist(state.artistBlacklist); player.syncBlacklist(Object.keys(state.blacklist)); }
 if (mobileRuntime) {
   mobileRuntime.ready.then(() => player.initialize()).catch(error => { state.error = error.message; render(); });
+  mobileRuntime.ready.then(() => refreshOverlay());
   setInterval(() => { if (document.visibilityState === 'visible') { player.refresh(); if (state.overlayOpen && state.overlay?.locked === false && !state.overlayBusy) refreshOverlay(); } }, 1000);
 }
 initializePublic();
