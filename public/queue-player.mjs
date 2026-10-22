@@ -72,7 +72,7 @@ export function createQueuePlayer({ audio, loadTrack, preferences, getBlockedArt
     if (state.mode === 'shuffle') open(shuffledIndex(1));
     else if (state.mode === 'single') open(state.index);
     else if (state.index + 1 < queue.length) open(state.index + 1);
-    else if (state.mode === 'loop' && queue.length) open(0);
+    else if (queue.length) open(0);
     else { state.paused = true; state.ended = true; changed(); }
   });
   audio.addEventListener('error', () => {

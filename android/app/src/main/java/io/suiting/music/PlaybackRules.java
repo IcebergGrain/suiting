@@ -6,6 +6,10 @@ import java.util.HashSet;
 import java.util.Set;
 
 public final class PlaybackRules {
+    public static boolean restartAtEnd(boolean ended, boolean playWhenReady, int repeatMode, int count) {
+        return ended && playWhenReady && repeatMode == 0 && count > 0;
+    }
+
     private PlaybackRules() {}
 
     public static int repeatMode(String mode) {

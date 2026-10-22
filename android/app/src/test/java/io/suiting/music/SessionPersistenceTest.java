@@ -45,6 +45,23 @@ public class SessionPersistenceTest {
         assertNotNull(client);
     }
 
+    @Test public void localLikesAccountSurvivesRestartAndLogoutClearsIt() throws Exception {
+        MemoryStore store = new MemoryStore();
+        store.snapshot = new JSONObject().put("cookies", new JSONObject().put("MUSIC_U", "token-value")).put("accountId", "42");
+        NetEaseClient client = new NetEaseClient(store);
+        assertEquals("42", client.accountId());
+        client.clearCookies();
+        assertEquals("", client.accountId());
+    }
+
+    @Test public void cachedAccountWithoutAuthenticationCannotStageNotificationLikes() throws Exception {
+        MemoryStore store = new MemoryStore();
+        store.snapshot = new JSONObject().put("cookies", new JSONObject()).put("accountId", "42");
+        assertEquals("", new NetEaseClient(store).accountId());
+        store.snapshot = new JSONObject().put("cookies", new JSONObject().put("MUSIC_U", "token-value")).put("accountId", "invalid");
+        assertEquals("", new NetEaseClient(store).accountId());
+    }
+
     @Test public void wikiOperationIsWhitelistedAndValidatesItsIdBeforeNetwork() throws Exception {
         assertTrue(BridgePolicy.operationAllowed("song_wiki_info"));
         NetEaseClient client = new NetEaseClient();

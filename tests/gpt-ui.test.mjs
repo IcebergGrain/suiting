@@ -51,7 +51,7 @@ test('daily song view separates local collection and official likes, and exclude
   const html = renderDaily({ ...app, songs });
   assert.match(html, /播放日推 · 2 首/);
   assert.match(html, /「收藏」只收入本机我的收藏/);
-  assert.match(html, /「喜欢到网易云」才会写入官方账号/);
+  assert.match(html, /只有在「我的 → 喜欢同步」提交才会写入官方账号/);
   assert.match(html, /data-action="show-more-daily"/);
   assert.equal(app.tracks.length, 2);
   assert.ok(app.tracks.every(entry => entry.song.dailyRecommendation === true));

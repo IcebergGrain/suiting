@@ -30,5 +30,6 @@ public final class NotificationLikeGate {
     }
 
     public synchronized boolean busy() { return busy; }
+    public synchronized void invalidate() { current = new Target(current.id, current.epoch, current.revision + 1); }
     public synchronized void finish() { busy = false; }
 }

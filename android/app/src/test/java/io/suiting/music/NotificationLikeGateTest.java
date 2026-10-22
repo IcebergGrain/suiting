@@ -4,6 +4,13 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class NotificationLikeGateTest {
+    @Test public void completedLocalActionInvalidatesDuplicateIntents() {
+        NotificationLikeGate gate = new NotificationLikeGate();
+        NotificationLikeGate.Target target = gate.select("1", 1);
+        assertTrue(gate.begin(target.id, target.epoch, target.revision));
+        gate.invalidate(); gate.finish();
+        assertFalse(gate.begin(target.id, target.epoch, target.revision));
+    }
     @Test public void staleTrackAndReturnedTrackCannotUseAnOldNotification() {
         NotificationLikeGate gate = new NotificationLikeGate();
         NotificationLikeGate.Target first = gate.select("1", 3);

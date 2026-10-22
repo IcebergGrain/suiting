@@ -67,8 +67,11 @@ test('native overlay no longer constructs a clickable action window, and notific
   assert.match(service, /setAvailableSessionCommands/);
   assert.match(service, /isMediaNotificationController\(controller\)/);
   assert.match(service, /notificationFavorites\.destroy\(\)/);
+  assert.match(service, /EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_PREV/);
+  assert.match(service, /EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_NEXT/);
   const notifications = await read('android/app/src/main/java/io/suiting/music/NotificationFavorites.java');
   assert.match(notifications, /setMediaButtonPreferences/);
-  assert.match(notifications, /likes\.set\(id, desired, epoch/);
+  assert.match(notifications, /likes\.stage\(account,/);
   assert.match(notifications, /gate\.begin\(id, epoch, revision\)/);
+  assert.doesNotMatch(notifications, /setEnabled\(false\)|SettableFuture|new OverlayLikes/);
 });

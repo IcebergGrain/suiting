@@ -5,6 +5,14 @@ import org.junit.Test;
 import static org.junit.Assert.*;
 
 public class PlaybackRulesTest {
+    @Test public void orderedQueueRestartsOnlyAfterNaturalEndWithPlaybackIntent() {
+        assertTrue(PlaybackRules.restartAtEnd(true, true, 0, 3));
+        assertFalse(PlaybackRules.restartAtEnd(true, false, 0, 3));
+        assertFalse(PlaybackRules.restartAtEnd(false, true, 0, 3));
+        assertFalse(PlaybackRules.restartAtEnd(true, true, 0, 0));
+        assertFalse(PlaybackRules.restartAtEnd(true, true, 1, 3));
+        assertFalse(PlaybackRules.restartAtEnd(true, true, 2, 3));
+    }
     @Test public void repeatModesMapToNativePlayerConstants() {
         assertEquals(0, PlaybackRules.repeatMode("order"));
         assertEquals(1, PlaybackRules.repeatMode("single"));

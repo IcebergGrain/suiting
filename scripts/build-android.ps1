@@ -1,6 +1,7 @@
 param(
     [string]$ToolsDirectory = (Join-Path $PSScriptRoot '..\.android-build-tools'),
-    [string]$SdkDirectory = $env:ANDROID_SDK_ROOT
+    [string]$SdkDirectory = $env:ANDROID_SDK_ROOT,
+    [switch]$Optimized
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,7 +27,9 @@ $gradle = Join-Path $tools 'gradle-8.9\bin\gradle.bat'
 if (-not (Test-Path -LiteralPath $gradle)) { $gradle = Join-Path $root 'android\gradlew.bat' }
 Push-Location (Join-Path $root 'android')
 try {
-    & $gradle --no-daemon --console=plain :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+    $variant = if ($Optimized) { 'release' } else { 'debug' }
+    $tasks = if ($Optimized) { @(':app:testDebugUnitTest', ':app:lintRelease', ':app:assembleRelease') } else { @(':app:testDebugUnitTest', ':app:lintDebug', ':app:assembleDebug') }
+    & $gradle --no-daemon --console=plain @tasks
     if ($LASTEXITCODE -ne 0) { throw 'Android checks or build failed.' }
-    Write-Output (Join-Path $root 'android\app\build\outputs\apk\debug\app-debug.apk')
+    Write-Output (Join-Path $root "android\app\build\outputs\apk\$variant\app-$variant.apk")
 } finally { Pop-Location }

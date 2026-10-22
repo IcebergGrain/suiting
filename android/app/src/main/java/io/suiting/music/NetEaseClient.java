@@ -35,6 +35,7 @@ public final class NetEaseClient {
     private final SessionPersistence persistence;
     private long sessionEpoch;
     private long likesVersion;
+    private String accountId = "";
     private long lastPersisted;
     private java.util.function.BooleanSupplier networkPermission = () -> true;
     public void setNetworkPermission(java.util.function.BooleanSupplier permission) { networkPermission = permission; }
@@ -61,6 +62,7 @@ public final class NetEaseClient {
                 if (name.matches("(?i)path|domain|expires|max-age|samesite|priority")) continue;
                 cookies.put(name, value);
             }
+            if (cookies.containsKey("MUSIC_U") && snapshot.optString("accountId").matches("[1-9][0-9]{0,17}")) accountId = snapshot.getString("accountId");
         } catch (Exception ignored) {
             cookies.clear();
         }
@@ -74,7 +76,7 @@ public final class NetEaseClient {
         try {
             JSONObject saved = new JSONObject();
             for (Map.Entry<String, String> entry : cookies.entrySet()) saved.put(entry.getKey(), entry.getValue());
-            persistence.save(new JSONObject().put("cookies", saved).put("savedAt", now));
+            persistence.save(new JSONObject().put("cookies", saved).put("accountId", accountId).put("savedAt", now));
         } catch (Exception ignored) {
         }
     }
@@ -83,6 +85,7 @@ public final class NetEaseClient {
         cookies.clear();
         createdPlaylistIds.clear();
         sessionEpoch++;
+        accountId = "";
         lastPersisted = 0;
         if (persistence != null) persistence.clear();
     }
@@ -93,9 +96,11 @@ public final class NetEaseClient {
 
     public synchronized long sessionVersion() { return sessionEpoch; }
     public synchronized long likesVersion() { return likesVersion; }
+    public synchronized String accountId() { return cookies.containsKey("MUSIC_U") ? accountId : ""; }
 
     public JSONObject callForSession(String operation, JSONObject parameters, long expectedSession) throws Exception {
         if (!networkPermission.getAsBoolean()) throw new IllegalStateException("网易云连接插件已关闭。");
+        long callEpoch = sessionVersion();
         if (!BridgePolicy.operationAllowed(operation)) throw new IllegalArgumentException("Unsupported operation");
         synchronized (this) {
             if (operation.equals("login_status") && !cookies.containsKey("MUSIC_U")) return new JSONObject().put("status", 200).put("body", new JSONObject().put("data", new JSONObject().put("code", 200).put("profile", JSONObject.NULL)));
@@ -178,6 +183,11 @@ public final class NetEaseClient {
         else if (operation.equals("login_qr_check")) body = new JSONObject().put("code", body.optInt("code", 502)).put("message", body.optString("message", ""));
         else if (operation.equals("login_status")) {
             JSONObject profile = body.optJSONObject("profile");
+            synchronized (this) {
+                if (callEpoch != sessionEpoch) throw new java.io.IOException("Session changed");
+                String nextAccount = profile == null ? "" : validId(profile.get("userId"));
+                if (!nextAccount.equals(accountId)) { accountId = nextAccount; lastPersisted = 0; persistSession(); }
+            }
             JSONObject safe = new JSONObject().put("code", body.optInt("code", 502));
             if (profile != null) safe.put("profile", new JSONObject().put("userId", profile.opt("userId")).put("nickname", profile.optString("nickname")).put("avatarUrl", profile.optString("avatarUrl")));
             body = new JSONObject().put("data", safe);

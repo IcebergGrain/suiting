@@ -1,3 +1,10 @@
+.likes-sync .daily-actions{flex-wrap:wrap}
+.likes-sync .button{min-height:48px}
+.likes-sync .track-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center}
+.likes-sync .track-main{min-width:0;overflow-wrap:anywhere}
+.likes-sync .track-main small{display:block;color:var(--muted);margin-top:4px}
+.likes-sync .collection-note{display:block}
+@media(max-width:420px){.likes-sync .track-row{grid-template-columns:minmax(0,1fr)}.likes-sync .track-row .button{justify-self:start}}
 .main{max-width:1740px;padding-inline:36px}
 .topbar{align-items:center}.topbar h1{font-size:30px}.topbar-actions{flex-wrap:wrap;justify-content:flex-end}
 .topbar .connection-button{min-height:48px;font-size:14px;border-radius:24px}

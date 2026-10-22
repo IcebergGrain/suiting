@@ -23,6 +23,7 @@ import androidx.media3.datasource.ResolvingDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.source.ProgressiveMediaSource;
 import androidx.media3.session.MediaSession;
+import androidx.media3.session.MediaConstants;
 import androidx.media3.session.MediaSessionService;
 import androidx.media3.session.SessionCommand;
 import androidx.media3.session.SessionCommands;
@@ -82,7 +83,7 @@ public final class PlaybackService extends MediaSessionService {
         try { blocked = PlaybackRules.blockedIds(new JSONArray(journal.getString("blocked", "[]"))); } catch (Exception ignored) {}
         try { artistRules = new ArtistRules(new JSONArray(journal.getString("blockedArtists", "[]"))); } catch (Exception ignored) {}
         ResolvingDataSource.Factory factory = new ResolvingDataSource.Factory(
-            new DefaultDataSource.Factory(this, new DefaultHttpDataSource.Factory().setUserAgent("SuiTing/0.1.3-public").setConnectTimeoutMs(15000).setReadTimeoutMs(20000).setAllowCrossProtocolRedirects(false)),
+            new DefaultDataSource.Factory(this, new DefaultHttpDataSource.Factory().setUserAgent("SuiTing/0.1.4-public").setConnectTimeoutMs(15000).setReadTimeoutMs(20000).setAllowCrossProtocolRedirects(false)),
             dataSpec -> {
                 Uri uri = dataSpec.uri;
                 long generation = sourceGeneration;
@@ -120,6 +121,15 @@ public final class PlaybackService extends MediaSessionService {
             }
             @Override public void onPositionDiscontinuity(Player.PositionInfo previous, Player.PositionInfo current, int reason) { resetClock(); }
             @Override public void onIsPlayingChanged(boolean playing) { resetClock(); }
+            @Override public void onPlaybackStateChanged(int state) {
+                if (!PlaybackRules.restartAtEnd(state == Player.STATE_ENDED, player.getPlayWhenReady(), player.getRepeatMode(), player.getMediaItemCount())) return;
+                long generation = sourceGeneration;
+                handler.post(() -> {
+                    if (generation != sourceGeneration || !PlaybackRules.restartAtEnd(player.getPlaybackState() == Player.STATE_ENDED, player.getPlayWhenReady(), player.getRepeatMode(), player.getMediaItemCount())) return;
+                    heardMillis = 0; recorded = false;
+                    player.seekTo(0, 0); player.prepare(); player.play(); resetClock();
+                });
+            }
             @Override public void onRepeatModeChanged(int mode) { journal.edit().putString("mode", PlaybackRules.modeName(mode, player.getShuffleModeEnabled())).apply(); }
             @Override public void onShuffleModeEnabledChanged(boolean enabled) { journal.edit().putString("mode", PlaybackRules.modeName(player.getRepeatMode(), enabled)).apply(); }
             @Override public void onPlayerError(PlaybackException failure) {
@@ -144,6 +154,10 @@ public final class PlaybackService extends MediaSessionService {
                 return notificationFavorites.command(command, arguments);
             }
         }).build();
+        Bundle slots = new Bundle();
+        slots.putBoolean(MediaConstants.EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_PREV, true);
+        slots.putBoolean(MediaConstants.EXTRAS_KEY_SLOT_RESERVATION_SEEK_TO_NEXT, true);
+        session.setSessionExtras(slots);
         notificationFavorites.attach(session);
         addSession(session);
         handler.post(tick);
@@ -201,7 +215,7 @@ public final class PlaybackService extends MediaSessionService {
             }
             case "player_play":
                 error = "";
-                if (player.getPlaybackState() == Player.STATE_ENDED) player.seekTo(0);
+                if (player.getPlaybackState() == Player.STATE_ENDED) player.seekTo(0, 0);
                 if (player.getPlayerError() != null || player.getPlaybackState() == Player.STATE_IDLE) player.prepare();
                 player.play(); break;
             case "player_pause": player.pause(); break;
@@ -288,7 +302,7 @@ public final class PlaybackService extends MediaSessionService {
             .put("duration", duration > 0 && duration != C.TIME_UNSET ? duration / 1000.0 : 0).put("quality", quality).put("volume", player.getVolume()).put("mode", PlaybackRules.modeName(player.getRepeatMode(), player.getShuffleModeEnabled()))
             .put("canNext", player.hasNextMediaItem()).put("canPrevious", player.hasPreviousMediaItem())
             .put("info", info == null ? JSONObject.NULL : info).put("error", error).put("heard", pendingHeard())
-            .put("likesVersion", ((SuiTingApplication) getApplication()).client().likesVersion()).put("overlay", desktopLyrics.status());
+            .put("likesVersion", ((SuiTingApplication) getApplication()).localLikes().version()).put("overlay", desktopLyrics.status());
     }
 
     private JSONArray pendingHeard() throws Exception {

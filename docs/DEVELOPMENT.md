@@ -20,7 +20,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -ToolsDirec
 脚本依次执行testDebugUnitTest、lintDebug、assembleDebug，构建前从当前public/src准备界面模块并检查引用。输出android/app/build/outputs/apk/debug/app-debug.apk。
 工具目录中优先使用gradle-8.9，否则使用仓库Wrapper，首次解析依赖需要网络。预览密钥在工具目录生成，不在仓库中；不同机器默认产生不同密钥，不能互相覆盖安装。正式分发需另行安全管理发布签名，不把密码、私钥或机器路径提交到仓库。
 
+0.1.4 的精简预览包使用 `-Optimized`：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-android.ps1 -Optimized -ToolsDirectory '原预览签名及构建工具目录'
+```
+
+它运行 JVM 测试、`lintRelease`、`assembleRelease`，启用 R8 和资源裁剪，输出 `android/app/build/outputs/apk/release/app-release.apk`。预览 release 仍使用原 `suiting-public-preview.keystore`，不换包名或证书；不要把密钥放入仓库。未传开关时仍生成 debug 包。优化不转码音乐，也不改变音频授权。
+
 ## 验证范围
 
-现版245项JavaScript、60项JVM通过，Android构建成功、Lint0错误与2项既有提示。Web验证使用合成静音音频，覆盖本地导入、播放器、生成候选不替换当前列表、彩蛋自助开关及退出；新增自动测试覆盖浏览器模块可达性、负向排除、歌手规则和通知开关门禁。
+现版256项JavaScript、71项JVM通过，Android构建成功、Lint0错误与2项既有提示。Web验证使用合成静音音频，覆盖本地导入、播放器、生成候选不替换当前列表、彩蛋自助开关及退出；新增自动测试覆盖浏览器模块可达性、负向排除、歌手规则和通知开关门禁。
 尚需Android设备验证多选与跨重启文档授权、文件移走／撤权、各编码解码、后台／锁屏、悬浮窗位置与点击穿透，以及真实账号登录／版权音源。容器扩展名受支持不保证所有设备解码成功。

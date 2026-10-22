@@ -22,7 +22,7 @@ Web本地音频副本保存在浏览器IndexedDB，以blob地址播放；本机N
 
 ## 能力边界
 
-固定包名io.suiting.music.publicapp，版本0.1.3-public／code4。安装名称随听。保留绿色与浅／深色主题；共享UI不是纯原生Compose，也不是网易云官方插件。
+固定包名io.suiting.music.publicapp，版本0.1.4-public／code5。安装名称随听。保留绿色与浅／深色主题；共享UI不是纯原生Compose，也不是网易云官方插件。
 JSON扩展是数据，源码扩展是需审查的可信代码。metadata／lyrics／presentation等kind提供合同，不代表任意运行时安装器已经实现。可扩展不等于允许绕过安全与随机不变量。
 
 ## 后续维护要点
@@ -32,4 +32,6 @@ JSON扩展是数据，源码扩展是需审查的可信代码。metadata／lyric
 - src/shuffle.mjs 的负向分类是硬限制。近期 100 首先按原范围排序取池，再排除，不得提前过滤整库而把更早歌曲晋升为近期。未知分类的取舍由用户明确开关。
 - src/library.mjs 与原生 ArtistRules 共同维护歌手 ID／完整署名语义。公开版须始终保留 local- 命名空间，不能照搬仅允许数字歌曲 ID 的私用代码。
 - NotificationFavorites 的红心只面向已启用网易云的官方数字 ID；NotificationControlPolicy 防止本地曲目或关闭插件绕过门禁。通知歌词不替用户开启插件或授予系统权限，不恢复常驻浮窗按钮。
+- 0.1.4 的 `src/likes-journal.mjs`／原生 `LocalLikes` 将按账号暂存的喜欢意图与远端观察快照分开。安卓通知和 WebView 共用应用私有日志；网页使用 `suiting.public.likes.v1`。仅显式同步写入官方，读回才清除对应待办；较新操作、失败与账户切换不可被旧回包覆盖。本地歌曲 ID 永不进入官方喜欢日志，通用歌单 JSON 备份不迁移喜欢日志。
+- `PlaybackRules.restartAtEnd` 只处理有播放意图的自然末尾续播，保留暂停、停止、错误和候选交接语义；本地 content／blob 与网易云来源走原有各自路径，不因移植私用修复而丢失本地音频支持。
 - 彩蛋继续默认关闭、原创素材兜底、用户临时自选。不要将个人版 GIF、商用录音、真实歌单备份或测试音频打入公开包。

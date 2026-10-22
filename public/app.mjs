@@ -33,6 +33,7 @@ import { createQueuePlayer, createNativeQueuePlayer } from './queue-player.mjs';
 import { createListeningSession, normalizePlayingQueue } from '/src/listening-session.mjs';
 import { renderMiniPlayer, renderPlayingQueue, renderCompactEmpty } from './compact-player-view.mjs';
 import { renderExclusions, renderArtistActions } from './exclusions-view.mjs';
+import { createLikeStore, createLikesController, effectiveLike } from '/src/likes-journal.mjs';
 const mobileRuntime = window.SuiTingMobileRuntime || null;
 
 const localFiles = mobileRuntime ? null : createLocalFiles();
@@ -54,7 +55,7 @@ const state = {
   blacklist: normalizeBlacklist(saved.blacklist), artistBlacklist: normalizeArtistBlacklist(saved.artistBlacklist), exclusionsOpen: false, libraryCategory: 'recent', libraryPlaylist: null, libraryVisits: saved.libraryVisits || {}, remoteOpen: saved.remoteOpen || { own: true, saved: false },
   profileSection: 'home', profileSearch: '', profileVisible: 60, overlayOpen: false, overlay: null, overlayError: '', overlayBusy: false,
   daily: null, dailyLoading: false, dailyError: '', dailySection: 'songs', dailyVisible: 60,
-  likes: { accountId: '', ids: [], loaded: false }, likesLoading: false, likesError: '', likePending: {},
+  likes: { accountId: '', ids: [], loaded: false }, likesLoading: false, likesError: '', likePending: {}, likeJournal: null, likeSyncBusy: false,
   exportScope: saved.exportScope === 'collection' ? 'collection' : 'queue',
   advancedOpen: false, filtersOpen: false, lyricsOpen: true, lyrics: { id: null, status: 'idle', lines: [], plain: [] }, classifyPaused: Boolean(saved.classifyPaused), undoBlacklist: null,
   selectionReport: saved.selectionReport || null, queueSettings: saved.queueSettings || null,
@@ -97,6 +98,10 @@ const classificationQueue = new Set();
 const lyricCache = new Map();
 let queueGeneration = 0;
 let queueLoadRevision = 0;
+const likesController = createLikesController({
+  store: createLikeStore({ storage: localStorage, request: mobileRuntime?.requestNative }), api,
+  account: () => state.features.netease && state.status.loggedIn ? state.status.profile?.userId : '',
+});
 const player = (mobileRuntime ? createNativeQueuePlayer : createQueuePlayer)({
   audio, request: mobileRuntime?.requestNative, preferences: state.playback,
   getBlockedIds: () => Object.keys(state.blacklist), getBlockedArtists: () => state.artistBlacklist,
@@ -585,7 +590,7 @@ function ownerName(owner) {
 function clearAccountViews() {
   ++accountEpoch; ++likesRevision;
   state.daily = null; state.dailyLoading = false; state.dailyError = '';
-  state.likes = { accountId: '', ids: [], loaded: false }; state.likesLoading = false; state.likesError = ''; state.likePending = {};
+  state.likes = { accountId: '', ids: [], loaded: false }; state.likesLoading = false; state.likesError = ''; state.likePending = {}; state.likeJournal = null; state.likeSyncBusy = false;
 }
 
 function dailySongs() {
@@ -598,7 +603,7 @@ function collectionSongs() {
 }
 
 function findSong(id) {
-  return allSongs().find(song => song.id === id) || state.activeQueue.find(song => song.id === id) || dailySongs().find(song => song.id === id) || state.references.flatMap(reference => reference.songs).find(song => song.id === id) || (player.snapshot().song?.id === id ? player.snapshot().song : null) || state.blacklist[id];
+  return allSongs().find(song => song.id === id) || state.activeQueue.find(song => song.id === id) || dailySongs().find(song => song.id === id) || state.references.flatMap(reference => reference.songs).find(song => song.id === id) || (player.snapshot().song?.id === id ? player.snapshot().song : null) || state.blacklist[id] || state.likeJournal?.records.find(record => record.id === id);
 }
 
 function collectionButton(song) {
@@ -609,10 +614,11 @@ function collectionButton(song) {
 
 function officialLikeButton(song) {
   if (!state.features.netease || isLocalSongId(song?.id)) return '';
-  if (!song || song.demo || !isPlayableSongId(song.id)) return '';
-  const known = state.likes.loaded && state.likes.accountId === String(state.status.profile?.userId);
-  const liked = known && state.likes.ids.includes(song.id);
-  return `<button class="button quiet small official-like ${liked ? 'active' : ''}" data-action="${known ? 'official-like' : 'load-likes'}" data-id="${escape(song.id)}" ${!state.status.loggedIn || state.likesLoading || state.likePending[song.id] ? 'disabled' : ''} ${known ? `aria-pressed="${liked}"` : ''}>${icon('heart')}${state.likePending[song.id] ? '核实中…' : known ? liked ? '取消网易云喜欢' : '喜欢到网易云' : state.status.loggedIn ? '读取网易云喜欢' : '登录后可喜欢'}</button>`;
+  if (!song || song.demo || !/^[1-9]\d{0,17}$/.test(song.id)) return '';
+  const journal = state.likeJournal?.accountId === String(state.status.profile?.userId) ? state.likeJournal : null;
+  const liked = effectiveLike(journal, song.id);
+  const pending = journal?.records.find(record => record.id === song.id && record.pending);
+  return `<button class="button quiet small official-like ${liked ? 'active' : ''}" data-action="official-like" data-id="${escape(song.id)}" ${!state.status.loggedIn || state.likePending[song.id] ? 'disabled' : ''} aria-pressed="${liked}">${icon('heart')}${state.likePending[song.id] ? '正在本机保存…' : !state.status.loggedIn ? '登录后可暂存喜欢' : pending ? liked ? '已暂存喜欢 · 待同步' : '暂存取消 · 待同步' : liked ? '已喜欢 · 点按暂存取消' : '暂存喜欢'}</button>`;
 }
 
 function toggleCollection(id) {
@@ -648,53 +654,87 @@ async function loadDaily(refresh = false) {
 }
 
 async function loadLikes() {
-  if (!state.status.loggedIn) { toast('请先连接网易云账号。'); return; }
-  if (state.likesLoading || Object.values(state.likePending).some(Boolean)) return;
+  if (!state.features.netease || !state.status.loggedIn) { toast('请先连接网易云账号。'); return; }
+  if (state.likesLoading || state.likeSyncBusy || Object.values(state.likePending).some(Boolean)) return;
   const epoch = accountEpoch;
   const accountId = String(state.status.profile?.userId);
   const revision = likesRevision;
   state.likesLoading = true; state.likesError = ''; render();
   try {
-    const result = await api('/api/likes');
+    const result = await likesController.check();
     if (epoch !== accountEpoch) return;
     if (revision !== likesRevision) return;
     if (result.accountId !== accountId) throw new Error('喜欢列表账号已变化，请重新连接。');
-    state.likes = { ...result, loaded: true };
+    acceptLikeJournal(result);
   } catch (error) {
     if (epoch === accountEpoch && revision === likesRevision) { state.likesError = `网易云喜欢状态未确认：${error.message}`; state.likes.loaded = false; toast(state.likesError); }
   } finally { if (epoch === accountEpoch) { state.likesLoading = false; render(); refreshNativeLikes(); } }
 }
 
 function onNativeLikesChanged() {
-  if (!state.status.loggedIn) return;
-  ++likesRevision; nativeLikesDirty = true; state.likes.loaded = false;
+  if (!state.features.netease || !state.status.loggedIn) return;
+  ++likesRevision; nativeLikesDirty = true;
   refreshNativeLikes();
 }
 
 function refreshNativeLikes() {
-  if (!nativeLikesDirty || !state.status.loggedIn || state.likesLoading || Object.values(state.likePending).some(Boolean)) return;
+  if (!state.features.netease || !nativeLikesDirty || !state.status.loggedIn || state.likesLoading || state.likeSyncBusy || Object.values(state.likePending).some(Boolean)) return;
   nativeLikesDirty = false;
-  void loadLikes();
+  void loadLocalLikes();
+}
+
+function acceptLikeJournal(journal) {
+  if (journal.accountId !== String(state.status.profile?.userId)) return;
+  state.likeJournal = journal;
+  state.likes = { accountId: journal.accountId, ids: journal.remoteIds, loaded: journal.remoteKnown };
+}
+
+async function loadLocalLikes() {
+  const epoch = accountEpoch;
+  const revision = likesRevision;
+  if (!state.features.netease || !state.status.loggedIn) return;
+  try {
+    const journal = await likesController.local();
+    if (epoch === accountEpoch && revision === likesRevision) { acceptLikeJournal(journal); render(); }
+  } catch (error) { if (epoch === accountEpoch) { state.likesError = error.message; render(); } }
 }
 
 async function setOfficialLike(id) {
-  if (!state.likes.loaded || state.likes.accountId !== String(state.status.profile?.userId)) return loadLikes();
-  if (state.likePending[id] || state.likesLoading) return;
+  if (!state.features.netease || !state.status.loggedIn || isLocalSongId(id) || state.likePending[id]) return;
+  const song = findSong(id);
+  if (!song) return;
   ++likesRevision;
   const epoch = accountEpoch;
-  const accountId = state.likes.accountId;
-  const liked = !state.likes.ids.includes(id);
   state.likePending[id] = true; state.likesError = ''; render();
   try {
-    const result = await api('/api/like', { method: 'POST', body: JSON.stringify({ id, liked, accountId }) });
+    const current = await likesController.local();
     if (epoch !== accountEpoch) return;
-    if (result.accountId !== accountId || result.liked !== liked || result.verified !== true) throw new Error('写入结果未确认，请刷新网易云喜欢核实，不要重复点击。');
-    state.likes.ids = state.likes.ids.filter(value => value !== id).concat(liked ? [id] : []);
-    toast(liked ? '网易云已回读确认红心。' : '网易云已回读确认取消喜欢。');
-    const source = state.sources.find(item => isRemoteSource(item) && String(item.owner?.id || item.owner?.userId || '') === accountId && (item.isLiked || item.specialType === 5));
-    if (source) { try { if (epoch === accountEpoch) await syncOne(source.id); } catch { if (epoch === accountEpoch) state.likesError = '红心已确认，但本机「我喜欢」快照未更新，请到同步页手动更新。'; } }
-  } catch (error) { if (epoch === accountEpoch) { state.likes.loaded = false; state.likesError = `网易云喜欢结果未确认：${error.message} 请刷新核实，未自动重试。`; toast(state.likesError); } }
+    const journal = await likesController.stage(song, !effectiveLike(current, id));
+    if (epoch !== accountEpoch) return;
+    acceptLikeJournal(journal);
+    toast('已保存到本机，未写入网易云。到「我的 → 喜欢同步」手动同步或核对。');
+  } catch (error) { if (epoch === accountEpoch) { state.likesError = `本机喜欢未保存：${error.message}`; toast(state.likesError); } }
   finally { if (epoch === accountEpoch) { delete state.likePending[id]; render(); refreshNativeLikes(); } }
+}
+
+async function syncLikes() {
+  if (!state.features.netease || state.likeSyncBusy || state.likesLoading || !state.status.loggedIn) return;
+  const epoch = accountEpoch;
+  state.likeSyncBusy = true; state.likesError = ''; render();
+  try {
+    const { journal, failures } = await likesController.sync();
+    if (epoch !== accountEpoch) return;
+    acceptLikeJournal(journal);
+    state.likesError = failures.length ? `同步已暂停：${failures[0].message} 未确认的操作仍保留；请先核对，不自动重试。` : '';
+    const remaining = journal.records.filter(record => record.pending).length;
+    toast(remaining ? `已核对，仍有 ${remaining} 首待同步。` : '待同步操作已核对一致。');
+    const source = state.sources.find(item => isRemoteSource(item) && String(item.owner?.id || item.owner?.userId || '') === journal.accountId && (item.isLiked || item.specialType === 5));
+    if (source) {
+      try { await syncOne(source.id); }
+      catch { if (epoch === accountEpoch) state.likesError += ' 本机「我喜欢」歌单快照未更新，请到同步页重试。'; }
+    }
+  } catch (error) { if (epoch === accountEpoch) state.likesError = `同步未确认：${error.message} 本机记录仍保留。`; }
+  finally { if (epoch === accountEpoch) { state.likeSyncBusy = false; render(); refreshNativeLikes(); } }
 }
 
 function blacklistSnackbar() {
@@ -782,7 +822,7 @@ function render() {
   draggingProgress = false;
   const headings = { workspace: ['今天想怎么听？', '选范围，挑氛围，生成下一批。'], library: ['我的音乐', '收藏的歌单，熟悉的打开方式。'], sync: ['连接你的音乐', '连接账号 → 同步歌单 → 回到工作台开始听。'], daily: ['日推', '网易云推荐，喜欢就留下。'], profile: ['个人主页', '收藏、黑名单与桌面歌词。'] };
   const [title, subtitle] = headings[state.tab];
-  root.innerHTML = `<div class="shell"><aside class="rail"><a href="#" class="brand" data-tab="workspace"><img src="/icon.svg" alt=""><span>随听 <span class="gpt-label">自由调频</span><small>SUI TING</small></span></a>${nav()}<div class="rail-foot">${icon('shield')}<p>随听 · 0.1.3<br>本地音乐 · 自由调频</p></div></aside><main class="main surface-${state.tab}" aria-busy="${state.busy}"><header class="topbar"><div class="top-title"><h1>${title}</h1><p>${subtitle}</p></div><div class="topbar-actions"><button class="button guide-button" data-action="open-guide">指南</button><button class="button connection-button" data-action="connect-netease" ${state.busy ? 'disabled' : ''}>${icon('music')}${state.status.loggedIn && state.features.netease ? '网易云 · 已连接' : '连接网易云'}</button><button class="button sync-button" ${!state.features.netease ? 'hidden' : ''} data-action="sync-all" ${state.busy || !state.sources.some(isRemoteSource) ? 'disabled' : ''}>${icon('sync')}同步</button><button class="button account-button" data-tab="profile" aria-label="个人主页"><span class="my-avatar">${state.localAvatar ? `<img src="${escape(state.localAvatar)}" alt="">` : icon('user')}</span><span class="my-label">我的</span></button></div></header>
+  root.innerHTML = `<div class="shell"><aside class="rail"><a href="#" class="brand" data-tab="workspace"><img src="/icon.svg" alt=""><span>随听 <span class="gpt-label">自由调频</span><small>SUI TING</small></span></a>${nav()}<div class="rail-foot">${icon('shield')}<p>随听 · 0.1.4<br>本地音乐 · 自由调频</p></div></aside><main class="main surface-${state.tab}" aria-busy="${state.busy}"><header class="topbar"><div class="top-title"><h1>${title}</h1><p>${subtitle}</p></div><div class="topbar-actions"><button class="button guide-button" data-action="open-guide">指南</button><button class="button connection-button" data-action="connect-netease" ${state.busy ? 'disabled' : ''}>${icon('music')}${state.status.loggedIn && state.features.netease ? '网易云 · 已连接' : '连接网易云'}</button><button class="button sync-button" ${!state.features.netease ? 'hidden' : ''} data-action="sync-all" ${state.busy || !state.sources.some(isRemoteSource) ? 'disabled' : ''}>${icon('sync')}同步</button><button class="button account-button" data-tab="profile" aria-label="个人主页"><span class="my-avatar">${state.localAvatar ? `<img src="${escape(state.localAvatar)}" alt="">` : icon('user')}</span><span class="my-label">我的</span></button></div></header>
   ${state.unsaved ? '<div class="notice error" role="alert">本次更改尚未保存，请先导出备份。<button class="text-button" data-action="export-backup">立即导出</button></div>' : ''}
   ${state.error ? `<div class="notice error" role="alert">${escape(state.error)} <button class="text-button" data-action="dismiss-error">收起</button></div>` : ''}
   ${state.busy ? `<div class="notice" role="status">${escape(state.busyText)}</div>` : ''}
@@ -876,7 +916,7 @@ function playerPanel() {
   <div class="player-secondary"><button class="button quiet small" data-action="player-mode" aria-label="切换播放模式，当前${playbackModes[mode]}">${icon(mode === 'shuffle' ? 'shuffle' : 'repeat')}${playbackModes[mode]}</button><button class="button quiet small" data-action="toggle-lyrics" aria-expanded="${state.lyricsOpen}" ${!view.song || !state.features.lyrics ? 'disabled' : ''}>歌词</button>${collectionButton(view.song)}${officialLikeButton(view.song)}${blacklistButton(view.song)}<button class="button quiet small queue-load-action" data-action="play-queue" ${!available || state.queueLoading || loadedBatch ? 'disabled' : ''}>${state.queueLoading ? '正在替换…' : loadedBatch ? '本批已载入' : '替换并播放本批'}</button><button class="button quiet small" data-action="clear-queue">停止并清空播放列表</button></div>
   <p class="queue-session-note" role="status">${loadedBatch ? `播放器正使用这批 ${view.count} 首，生成新候选不会打断它。` : '播放器仍使用原列表；新候选需要手动点击播放才替换。'}</p>${state.queueLoadError ? `<p class="notice error" role="alert">${escape(state.queueLoadError)}</p>` : ''}
   ${view.error ? `<p class="notice error" role="alert">${escape(view.error)}</p>` : ''}
-  <details class="player-settings"><summary>音质与播放设置<span>${escape(isLocalSongId(view.song?.id) ? '原文件' : qualityDefinitions[view.quality]?.name.split(' · ')[0] || '极高')}</span></summary><div class="player-settings-body"><div><label for="player-quality">平台音质请求（本地使用原文件）</label><select id="player-quality" ${isLocalSongId(view.song?.id) ? 'disabled' : ''}>${Object.entries(qualityDefinitions).map(([value, item]) => `<option value="${value}" ${view.quality === value ? 'selected' : ''}>${item.name}</option>`).join('')}</select><p class="player-quality-actual">${escape(qualityDescription(view.info))}</p></div><div><label for="player-volume">应用音量</label><input id="player-volume" type="range" min="0" max="100" value="${Math.round(view.volume * 100)}" aria-valuetext="${Math.round(view.volume * 100)}%"></div><p class="tiny-note player-explanation">音质独立于网易云设置，以实际返回与账号权限为准，不保证设备输出无损。歌词缺失不影响播放。顺序播放到末尾停止，单曲循环重复当前歌，列表循环整批重播；随机播放只洗牌已载入的队列，每轮不重复，循环使用该随机顺序。切歌按钮仍可手动切歌。</p><p class="tiny-note player-explanation">生成只更新候选；点击「播放这批」才替换当前列表。拉黑会立即移出播放队列。实际播放满 15 秒计入冷却，拖动进度不算。</p></div></details></section>`;
+  <details class="player-settings"><summary>音质与播放设置<span>${escape(isLocalSongId(view.song?.id) ? '原文件' : qualityDefinitions[view.quality]?.name.split(' · ')[0] || '极高')}</span></summary><div class="player-settings-body"><div><label for="player-quality">平台音质请求（本地使用原文件）</label><select id="player-quality" ${isLocalSongId(view.song?.id) ? 'disabled' : ''}>${Object.entries(qualityDefinitions).map(([value, item]) => `<option value="${value}" ${view.quality === value ? 'selected' : ''}>${item.name}</option>`).join('')}</select><p class="player-quality-actual">${escape(qualityDescription(view.info))}</p></div><div><label for="player-volume">应用音量</label><input id="player-volume" type="range" min="0" max="100" value="${Math.round(view.volume * 100)}" aria-valuetext="${Math.round(view.volume * 100)}%"></div><p class="tiny-note player-explanation">音质独立于网易云设置，以实际返回与账号权限为准，不保证设备输出无损。歌词缺失不影响播放。顺序播放到末尾从第一首继续，单曲循环重复当前歌，列表循环整批重播；随机播放只洗牌已载入的队列，每轮不重复，循环使用该随机顺序。切歌按钮仍可手动切歌。</p><p class="tiny-note player-explanation">生成只更新候选；点击「播放这批」才替换当前列表。拉黑会立即移出播放队列。实际播放满 15 秒计入冷却，拖动进度不算。</p></div></details></section>`;
 }
 function workspace() {
   if (!allSongs().length) return renderCompactEmpty();
@@ -1180,7 +1220,7 @@ async function refreshStatus() {
     const status = await api('/api/status');
     if (String(status.profile?.userId || '') !== String(state.status.profile?.userId || '') || !status.loggedIn) clearAccountViews();
     state.status = status;
-    if (state.status.loggedIn) await loadPlaylists();
+    if (state.status.loggedIn) await Promise.all([loadPlaylists(), loadLocalLikes()]);
     render();
     if (state.autoSync && state.status.loggedIn) await syncAll();
   } catch (error) { state.error = `${mobileRuntime ? '手机接口' : '本机服务'}连接未完成：${error.message}`; render(); }
@@ -1202,7 +1242,7 @@ function pollQr(key, startedAt) {
       const result = await api(`/api/login/check?key=${encodeURIComponent(key)}`);
       if (result.loggedIn) {
         clearAccountViews(); state.status = { loggedIn: true, profile: result.profile };
-        state.qr = null; await loadPlaylists(); render(); toast('已连接网易云，请选择要同步的歌单。');
+        state.qr = null; await Promise.all([loadPlaylists(), loadLocalLikes()]); render(); toast('已连接网易云，请选择要同步的歌单。');
         return;
       }
       state.qrMessage = result.message || (Number(result.code) === 802 ? '已扫码，请在网易云确认登录。' : '等待网易云扫码…');
@@ -1312,7 +1352,7 @@ surface.addEventListener('click', async event => {
   else if (action === 'overlay-options') { state.overlayOpen = !state.overlayOpen; await refreshOverlay(); renderChrome(); }
   else if (action.startsWith('profile-')) {
     if (action === 'profile-sync') await navigate('sync');
-    else { state.tab = 'profile'; state.profileSection = action === 'profile-blacklist' ? 'blacklist' : action === 'profile-collection' ? 'collection' : action === 'profile-appearance' ? 'appearance' : action === 'profile-plugins' ? 'plugins' : 'home'; state.profileSearch = ''; state.profileVisible = 60; state.overlayOpen = action === 'profile-overlay'; render(); window.scrollTo({ top: 0, behavior: 'instant' }); if (state.overlayOpen) await refreshOverlay(); }
+    else { state.tab = 'profile'; state.profileSection = action === 'profile-blacklist' ? 'blacklist' : action === 'profile-collection' ? 'collection' : action === 'profile-likes' ? 'likes' : action === 'profile-appearance' ? 'appearance' : action === 'profile-plugins' ? 'plugins' : 'home'; state.profileSearch = ''; state.profileVisible = 60; state.overlayOpen = action === 'profile-overlay'; render(); window.scrollTo({ top: 0, behavior: 'instant' }); if (state.overlayOpen) await refreshOverlay(); if (state.profileSection === 'likes') await loadLocalLikes(); }
   }
   else if (action === 'choose-avatar') document.querySelector('#avatar-file').click();
   else if (action === 'reset-avatar') { state.localAvatar = ''; state.avatarError = ''; persist(); render(); toast('已恢复默认头像，不修改音乐账号头像。'); }
@@ -1341,6 +1381,7 @@ surface.addEventListener('click', async event => {
   else if (action === 'collect-song') toggleCollection(id);
   else if (action === 'official-like') await setOfficialLike(id);
   else if (action === 'load-likes') await loadLikes();
+  else if (action === 'sync-likes') await syncLikes();
   else if (action === 'import-daily-playlist') await perform('正在完整读取推荐歌单，只读导入到随听…', async () => { await syncOne(id); state.tab = 'library'; state.libraryPlaylist = id; });
   else if (action === 'export-collection') { const alreadyOpen = state.exportOpen && state.exportScope === 'collection'; state.exportScope = 'collection'; state.exportOpen = !alreadyOpen; if (!state.exportJob) state.exportDraft.name = '随听 · 日推收藏'; render(); }
   else if (action === 'overlay-refresh') await refreshOverlay();
@@ -1587,7 +1628,7 @@ for (const type of ['wheel', 'touchmove', 'pointerdown']) surface.addEventListen
 }, { passive: true });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { player.refresh?.(); if (mobileRuntime) refreshOverlay(); if (mobileRuntime && state.status.loggedIn) loadLikes(); }
+  if (document.visibilityState === 'visible') { player.refresh?.(); if (mobileRuntime) refreshOverlay(); if (mobileRuntime && state.status.loggedIn && state.features.netease) loadLocalLikes(); }
   if (document.visibilityState === 'visible' && state.autoSync && state.status.loggedIn && !state.busy && Date.now() - lastVisibilitySync > 60000) { lastVisibilitySync = Date.now(); syncAll(); }
 });
 

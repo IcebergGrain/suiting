@@ -4,6 +4,7 @@ import android.app.Application;
 
 public final class SuiTingApplication extends Application {
     private NetEaseClient client;
+    private LocalLikes localLikes;
     private LocalLibrary localLibrary;
     private PublicFeatures features;
     public LocalLibrary localLibrary() { return localLibrary; }
@@ -17,9 +18,16 @@ public final class SuiTingApplication extends Application {
         localLibrary = new LocalLibrary(this);
         client = new NetEaseClient(new SessionStore(this));
         client.setNetworkPermission(() -> features.enabled("netease"));
+        android.content.SharedPreferences preferences = getSharedPreferences("local-likes", MODE_PRIVATE);
+        localLikes = new LocalLikes(new LocalLikes.Store() {
+            @Override public String load() { return preferences.getString("accounts", "{}"); }
+            @Override public boolean save(String value) { return preferences.edit().putString("accounts", value).commit(); }
+        }, System::currentTimeMillis);
     }
 
     public NetEaseClient client() {
         return client;
     }
+
+    public LocalLikes localLikes() { return localLikes; }
 }

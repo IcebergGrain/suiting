@@ -84,12 +84,12 @@ test('player supports pause, resume, next, previous and bounded seek', async () 
   await player.stop(); assert.equal(player.snapshot().song, null); assert.equal(audio.src, '');
 });
 
-test('natural end advances frozen queue and stops at last song', async () => {
+test('natural end advances frozen queue and restarts at its first song', async () => {
   const { player, audio } = fixture();
   await player.start(songs);
   audio.emit('ended'); await flush(); assert.equal(player.snapshot().song.id, '2');
   await player.next(); audio.emit('ended'); await flush();
-  assert.equal(player.snapshot().song.id, '3'); assert.equal(player.snapshot().ended, true);
+  assert.equal(player.snapshot().song.id, '1'); assert.equal(player.snapshot().ended, false);
 });
 
 test('actual listening counts, seeking and paused time do not', async () => {
@@ -143,7 +143,7 @@ test('single mode repeats the current song and loop mode wraps the list', async 
   await player.next(); assert.equal(player.snapshot().song.id, '3');
   await player.setMode('loop'); audio.emit('ended'); await flush(); assert.equal(player.snapshot().song.id, '1');
   await player.previous(); assert.equal(player.snapshot().song.id, '3');
-  await player.setMode('order'); audio.emit('ended'); await flush(); assert.equal(player.snapshot().ended, true);
+  await player.setMode('order'); audio.emit('ended'); await flush(); assert.equal(player.snapshot().song.id, '1'); assert.equal(player.snapshot().ended, false);
 });
 
 test('blacklisting current and queued songs removes them immediately, preserving a paused state', async () => {

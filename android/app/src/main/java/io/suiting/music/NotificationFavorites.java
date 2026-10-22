@@ -2,8 +2,6 @@ package io.suiting.music;
 
 import android.content.Context;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.widget.Toast;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.util.UnstableApi;
@@ -15,12 +13,9 @@ import androidx.media3.session.SessionError;
 import androidx.media3.session.SessionResult;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.SettableFuture;
 import java.util.Collections;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 @UnstableApi
 public final class NotificationFavorites {
@@ -31,26 +26,22 @@ public final class NotificationFavorites {
     private final Context context;
     private final ExoPlayer player;
     private final NetEaseClient client;
-    private final OverlayLikes likes;
+    private final LocalLikes likes;
     private final DesktopLyrics lyrics;
     private final NotificationLyricsGate lyricsGate = new NotificationLyricsGate();
     private final NotificationLikeGate gate = new NotificationLikeGate();
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private MediaSession session;
     private NotificationLikeGate.Target target;
     private Boolean liked;
-    private boolean reading;
     private boolean destroyed;
-    private long readAt;
     private long observedVersion = -1;
-    private SettableFuture<SessionResult> pending;
+    private String accountId = "";
     private String controlsState = "";
 
     public NotificationFavorites(Context context, ExoPlayer player, NetEaseClient client, DesktopLyrics lyrics) {
         this.context = context; this.player = player; this.client = client;
         this.lyrics = lyrics;
-        likes = new OverlayLikes(client::callForSession, client::sessionVersion, System::currentTimeMillis);
+        likes = ((SuiTingApplication) context.getApplicationContext()).localLikes();
     }
 
     public void attach(MediaSession session) { this.session = session; refresh(); }
@@ -59,27 +50,15 @@ public final class NotificationFavorites {
         if (destroyed || session == null) return;
         refreshLyrics();
         String configuration = features().enabled("netease") + ":" + lyricsAllowed();
-        if (!configuration.equals(controlsState)) { controlsState = configuration; liked = null; observedVersion = -1; publish(); }
+        if (!configuration.equals(controlsState)) { controlsState = configuration; observedVersion = -1; }
         MediaItem current = player.getCurrentMediaItem();
         NotificationLikeGate.Target selected = gate.select(current == null ? "" : current.mediaId, client.sessionVersion());
-        if (selected != target) { target = selected; liked = null; readAt = 0; publish(); }
-        if (!NotificationControlPolicy.canLike(selected.id, features().enabled("netease")) || reading || gate.busy()) return;
-        long version = client.likesVersion();
-        if (observedVersion == version && System.currentTimeMillis() - readAt < 60000) return;
-        boolean invalidate = observedVersion != version;
-        reading = true; readAt = System.currentTimeMillis(); observedVersion = version; publish();
-        executor.submit(() -> {
-            Boolean result;
-            try { if (invalidate) likes.invalidate(); result = likes.read(selected.id).liked; }
-            catch (Exception unavailable) { result = null; }
-            Boolean loaded = result;
-            handler.post(() -> {
-                if (destroyed) return;
-                reading = false;
-                if (gate.matches(selected) && selected.epoch == client.sessionVersion() && version == client.likesVersion()) liked = loaded;
-                publish(); refresh();
-            });
-        });
+        String account = client.accountId();
+        if (selected == target && observedVersion == likes.version() && account.equals(accountId)) return;
+        target = selected; accountId = account; observedVersion = likes.version();
+        try { liked = NotificationControlPolicy.canLike(selected.id, features().enabled("netease")) && !account.isEmpty() && likes.liked(account, selected.id); }
+        catch (Exception unavailable) { liked = null; }
+        publish();
     }
 
     private void publish() {
@@ -89,10 +68,11 @@ public final class NotificationFavorites {
         if (NotificationControlPolicy.canLike(target.id, features().enabled("netease"))) {
             Bundle extras = new Bundle();
             extras.putString("songId", target.id); extras.putLong("epoch", target.epoch); extras.putLong("revision", target.revision);
+            extras.putString("accountId", accountId); extras.putLong("likesRevision", observedVersion);
             extras.putBoolean("liked", !Boolean.TRUE.equals(liked));
-            String label = reading || gate.busy() ? "正在核对网易云喜欢" : Boolean.TRUE.equals(liked) ? "取消网易云喜欢" : "喜欢到网易云";
+            String label = Boolean.TRUE.equals(liked) ? "暂存取消喜欢" : "暂存喜欢，稍后同步";
             CommandButton button = new CommandButton.Builder(Boolean.TRUE.equals(liked) ? CommandButton.ICON_HEART_FILLED : CommandButton.ICON_HEART_UNFILLED)
-                .setDisplayName(label).setSessionCommand(new SessionCommand(ACTION, extras)).setEnabled(!reading && !gate.busy()).build();
+                .setDisplayName(label).setSessionCommand(new SessionCommand(ACTION, extras)).build();
             buttons.add(button);
         }
         if (lyricsAllowed()) {
@@ -154,40 +134,26 @@ public final class NotificationFavorites {
         if (!NotificationControlPolicy.canLike(id, features().enabled("netease"))) return Futures.immediateFuture(new SessionResult(SessionError.ERROR_PERMISSION_DENIED));
         long epoch = request.getLong("epoch", -1);
         long revision = request.getLong("revision", -1);
-        if (!request.containsKey("liked") || reading || !gate.begin(id, epoch, revision)) {
+        String account = client.accountId();
+        if (!request.containsKey("liked") || account.isEmpty() || !account.equals(request.getString("accountId", "")) || request.getLong("likesRevision", -1) != likes.version() || !gate.begin(id, epoch, revision)) {
             refresh();
-            Toast.makeText(context, "歌曲或账号已变化，请稍候使用当前通知的红心", Toast.LENGTH_SHORT).show();
+            Toast.makeText(context, account.isEmpty() ? "请先在随听连接网易云账号" : "歌曲或喜欢状态已变化，请使用当前通知的红心", Toast.LENGTH_SHORT).show();
             return Futures.immediateFuture(new SessionResult(SessionError.ERROR_INVALID_STATE));
         }
         boolean desired = request.getBoolean("liked");
         String title = current == null || current.mediaMetadata.title == null ? "当前歌曲" : current.mediaMetadata.title.toString();
-        SettableFuture<SessionResult> result = SettableFuture.create(); pending = result; publish();
-        executor.submit(() -> {
-            OverlayLikes.State confirmed = null;
-            String failure = "";
-            try { confirmed = likes.set(id, desired, epoch, () -> gate.matches(id, epoch, revision)); }
-            catch (Exception unavailable) { failure = unavailable.getMessage() == null ? "喜欢结果未确认，请到网易云核对" : unavailable.getMessage(); }
-            OverlayLikes.State verified = confirmed;
-            String message = failure;
-            handler.post(() -> {
-                gate.finish();
-                if (destroyed) { result.cancel(false); return; }
-                pending = null;
-                boolean same = gate.matches(id, epoch, revision) && epoch == client.sessionVersion();
-                if (same) liked = verified == null ? null : verified.liked;
-                observedVersion = same ? client.likesVersion() : -1; readAt = same ? System.currentTimeMillis() : 0;
-                if (verified == null) Toast.makeText(context, message, Toast.LENGTH_LONG).show();
-                else Toast.makeText(context, title + (verified.liked ? " · 已喜欢到网易云" : " · 已取消网易云喜欢"), Toast.LENGTH_SHORT).show();
-                result.set(new SessionResult(verified == null ? SessionError.ERROR_UNKNOWN : SessionResult.RESULT_SUCCESS));
-                publish(); refresh();
-            });
-        });
-        return result;
+        try {
+            likes.stage(account, new org.json.JSONObject().put("id", id).put("title", title).put("artist", current == null ? "" : current.mediaMetadata.artist), desired);
+            gate.invalidate();
+            Toast.makeText(context, title + " · 已保存本机，稍后到「我的 → 喜欢同步」核对", Toast.LENGTH_SHORT).show();
+            return Futures.immediateFuture(new SessionResult(SessionResult.RESULT_SUCCESS));
+        } catch (Exception unavailable) {
+            Toast.makeText(context, "喜欢未保存成功，请回随听重试", Toast.LENGTH_LONG).show();
+            return Futures.immediateFuture(new SessionResult(SessionError.ERROR_UNKNOWN));
+        } finally { gate.finish(); refresh(); }
     }
 
     public void destroy() {
         destroyed = true; gate.select("", -1);
-        if (pending != null) pending.cancel(false);
-        handler.removeCallbacksAndMessages(null); executor.shutdownNow();
     }
 }

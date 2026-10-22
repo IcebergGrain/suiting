@@ -192,7 +192,7 @@ public final class MainActivity extends Activity {
             }
             if (operation.equals("ready")) {
                 pageReady = true;
-                JSONObject result = new JSONObject().put("appVersion", "0.1.3-public").put("systemTheme", dark ? "dark" : "light").put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("sdk", Build.VERSION.SDK_INT).put("sharedText", sharedText == null ? JSONObject.NULL : sharedText);
+                JSONObject result = new JSONObject().put("appVersion", "0.1.4-public").put("systemTheme", dark ? "dark" : "light").put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("sdk", Build.VERSION.SDK_INT).put("sharedText", sharedText == null ? JSONObject.NULL : sharedText);
                 sharedText = null; reply(proxy, id, result, null); return;
             }
             if (operation.equals("appearance")) {
@@ -258,6 +258,20 @@ public final class MainActivity extends Activity {
                         reply(proxy,id,result,null);
                     } catch(Exception unavailable) {reply(proxy,id,null,"本地文件不可用，请重新选择音频；原文件没有被修改。");}
                 });return;
+            }
+            if (operation.startsWith("local_likes_")) {
+                String accountId = parameters.getString("accountId");
+                if (!application.features().enabled("netease") || raw.length() > 3 * 1024 * 1024 || accountId.isEmpty() || !accountId.equals(application.client().accountId())) throw new IllegalStateException("喜欢记录账号已变化，请重新连接。");
+                JSONObject result;
+                switch (operation) {
+                    case "local_likes_status": result = application.localLikes().get(accountId); break;
+                    case "local_likes_set":
+                        if (!(parameters.opt("liked") instanceof Boolean)) throw new IllegalArgumentException("Invalid like state");
+                        result = application.localLikes().stage(accountId, parameters.getJSONObject("song"), parameters.getBoolean("liked")); break;
+                    case "local_likes_observe": result = application.localLikes().observe(accountId, parameters.getJSONArray("ids")); break;
+                    default: throw new IllegalArgumentException("Unsupported local likes operation");
+                }
+                reply(proxy, id, result, null); return;
             }
             if (operation.startsWith("overlay_")) {
                 if (raw.length() > 4096 || playback == null) throw new IllegalArgumentException("Desktop lyrics not ready");
